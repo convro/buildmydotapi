@@ -1,22 +1,53 @@
-import ora from 'ora';
+import ora   from 'ora';
 import chalk from 'chalk';
 
-// Braille hex-feel frames for custom spinner
-const hexFrames = ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'];
+// ── Spinner frame sets ────────────────────────────────────────────────────────
+
+const FRAMES = {
+  hex:    { interval: 80,  frames: ['⣾','⣽','⣻','⢿','⡿','⣟','⣯','⣷'] },
+  dots:   { interval: 80,  frames: ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'] },
+  arc:    { interval: 100, frames: ['◜','◠','◝','◞','◡','◟'] },
+  bounce: { interval: 120, frames: ['⠁','⠂','⠄','⡀','⢀','⠠','⠐','⠈'] },
+  pulse:  { interval: 100, frames: ['◉','◎','◉','◌'] },
+};
+
+// ── Factory ───────────────────────────────────────────────────────────────────
 
 /**
- * Create a styled hex spinner
- * @param {string} text  - Main spinner text
- * @param {string} [sub] - Dim subtext shown in brackets
+ * Create a styled spinner.
+ * @param {string} text   - Main label
+ * @param {string} [sub]  - Dim sub-label in brackets
+ * @param {string} [style]- Frame style: 'hex' | 'dots' | 'arc' | 'bounce' | 'pulse'
  */
-export function createSpinner(text, sub = '') {
-  const label = chalk.white(text) + (sub ? chalk.gray(`  [${sub}]`) : '');
+export function createSpinner(text, sub = '', style = 'hex') {
+  const frames = FRAMES[style] || FRAMES.hex;
+  const label  = chalk.white(text) + (sub ? chalk.gray(`  [${sub}]`) : '');
   return ora({
-    text: label,
-    spinner: { interval: 80, frames: hexFrames },
-    color: 'cyan',
+    text:    label,
+    spinner: frames,
+    color:   'cyan',
   });
 }
+
+/** AI operations — dots style, magenta color */
+export function createAiSpinner(text) {
+  return ora({
+    text:    chalk.white(text) + chalk.gray('  [AI thinking]'),
+    spinner: FRAMES.dots,
+    color:   'magenta',
+  });
+}
+
+/** File write operations — compact pulse */
+export function createFileSpinner(text) {
+  return ora({
+    text:    chalk.gray(text),
+    spinner: FRAMES.pulse,
+    color:   'cyan',
+  });
+}
+
+// ── State helpers ─────────────────────────────────────────────────────────────
 
 export function spinnerSuccess(spinner, text) {
   spinner.succeed(chalk.green(text));

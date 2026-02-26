@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
 
-// Load dotenv from cwd or tool root
+// ─── .env loading ─────────────────────────────────────────────────────────────
 import dotenv from 'dotenv';
 const cwdEnv  = join(process.cwd(), '.env');
 const rootEnv = join(__dirname, '..', '.env');
@@ -24,24 +24,18 @@ import { program } from 'commander';
 const pkgPath = join(__dirname, '..', 'package.json');
 const pkg     = JSON.parse(readFileSync(pkgPath, 'utf8'));
 
-// ─── Custom arg pre-processing ────────────────────────────────────────────────
-// Supports syntax:  vbs -h -s prompt='my api description'
-// The shell strips quotes so we receive:  ['-h', '-s', 'prompt=my api description']
-// We also strip stray '&' separators in case user quotes the full command.
+// ─── Arg pre-processing ───────────────────────────────────────────────────────
+// Supports syntax:  vbs -h -s --type=fullstack prompt='my description'
+// Also drops stray '&' separators used in docs.
 
 function preprocessArgs(argv) {
   const processed = [];
   for (const arg of argv) {
-    // Drop bare '&' separator (visual separator in docs, not needed by Commander)
     if (arg === '&') continue;
-
-    // Convert  prompt='text'  or  prompt=text  →  extract as positional arg
     if (arg.startsWith('prompt=')) {
-      const value = arg.slice('prompt='.length);
-      processed.push(value);
+      processed.push(arg.slice('prompt='.length));
       continue;
     }
-
     processed.push(arg);
   }
   return processed;
@@ -53,31 +47,84 @@ const processedArgv = [
   ...preprocessArgs(process.argv.slice(2)),
 ];
 
-// ─── CLI Definition ───────────────────────────────────────────────────────────
+// ─── CLI ──────────────────────────────────────────────────────────────────────
 
 program
   .name('vbs')
-  .description(`VBS=${pkg.version} — Virtual Based Scenography\nAI-powered REST API deployment for your VPS`)
-  // Move default -h/--help to -H so we can use -h for --host
-  .helpOption('-H, --help', 'Show help information')
-  .version(pkg.version, '-v, --version', 'Show version number')
-  .argument('[prompt]', "Describe the API to create  (or use  prompt='description')")
-  .option('-h, --host',    'Display server host/IP info in output and links')
-  .option('-s, --summary', 'Generate an extended summary after deployment')
-  .option('-d, --debug',   'Enable debug output for troubleshooting')
-  .addHelpText('after', `
-Examples:
-  vbs prompt='REST API for a blog with users and posts'
-  vbs -h -s prompt='E-commerce API with JWT auth and PostgreSQL'
-  vbs -h 'Simple todo list API with SQLite'
+  .description(`VBS v${pkg.version} — Virtual Based Scenography\nAI-powered full-stack deployment for your VPS`)
+  .helpOption('-H, --help', 'Show help')
+  .version(pkg.version, '-v, --version', 'Show version');
 
-Command format:
-  vbs=${pkg.version} -h -s & prompt='your description here'
-  (wrap the & in quotes or omit it when typing directly in the shell)
+// ── Default command: BUILD ─────────────────────────────────────────────────────
+program
+  .argument('[prompt]', "Describe what to build  (or use prompt='description')")
+  .option('-h, --host',                    'Show server host/IP in output and links')
+  .option('-s, --summary',                 'Generate extended summary after deployment')
+  .option('-d, --debug',                   'Enable debug output')
+  .option('-t, --type <type>',             'Project type: api | frontend | fullstack', 'api')
+  .addHelpText('after', `
+Project types:
+  api        REST API (Express.js + optional DB)         [default]
+  frontend   Frontend only (React/Vite or Next.js)
+  fullstack  Full-stack: backend API + frontend + nginx
+
+Build examples:
+  vbs prompt='REST API for a blog with posts and comments'
+  vbs -h -s prompt='E-commerce API with JWT auth and PostgreSQL'
+  vbs -h -s --type=frontend prompt='Dashboard app with React and Tailwind'
+  vbs -h -s --type=fullstack prompt='Blog platform with admin panel'
+
+  Full syntax:
+  vbs=${pkg.version} -h -s & --type=fullstack & prompt='your description'
+
+Project management:
+  vbs list                              List all saved projects
+  vbs open  <name>                      Show project details
+  vbs modify <name> prompt='changes'    Modify project with AI
 `)
   .action(async (prompt, options) => {
+    // Validate type
+    const validTypes = ['api', 'frontend', 'fullstack'];
+    if (!validTypes.includes(options.type)) {
+      console.error(`\n  Error: unknown type "${options.type}". Use: api | frontend | fullstack\n`);
+      process.exit(1);
+    }
+
     const { run } = await import('../src/index.mjs');
     await run(prompt, options);
+  });
+
+// ── Subcommand: LIST ───────────────────────────────────────────────────────────
+program
+  .command('list')
+  .description('List all saved VBS projects')
+  .action(async () => {
+    const { runList } = await import('../src/commands/list.mjs');
+    await runList();
+  });
+
+// ── Subcommand: OPEN ───────────────────────────────────────────────────────────
+program
+  .command('open <name>')
+  .description('Show detailed info about a saved project')
+  .action(async (name) => {
+    const { runOpen } = await import('../src/commands/open.mjs');
+    await runOpen(name);
+  });
+
+// ── Subcommand: MODIFY ─────────────────────────────────────────────────────────
+program
+  .command('modify <name> [prompt]')
+  .description('Modify an existing project with AI')
+  .addHelpText('after', `
+Examples:
+  vbs modify my-blog prompt='add dark mode toggle'
+  vbs modify shop-api prompt='add product categories and search endpoint'
+  vbs modify blog-app prompt='add user dashboard with stats'
+`)
+  .action(async (name, prompt, opts, cmd) => {
+    const { runModify } = await import('../src/commands/modify.mjs');
+    await runModify(name, prompt, cmd.parent?.opts() || {});
   });
 
 program.parse(processedArgv);
