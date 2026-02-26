@@ -4,18 +4,23 @@ import { sendMessage, MODELS } from './client.mjs';
  * Ask the AI to analyze HTTP test results and provide feedback.
  * @param {Array}  testResults - Array of test result objects
  * @param {string} projectName
+ * @param {string} [serverIp]  - Server IPv4 for real link generation
+ * @param {string} [port]      - API port
  */
-export async function analyzeTestResults(testResults, projectName) {
-  const systemPrompt = `You are CreateMy.api deployment analyzer. Analyze HTTP endpoint test results and give brief, practical feedback.
+export async function analyzeTestResults(testResults, projectName, serverIp = null, port = '3000') {
+  const baseUrl = serverIp ? `http://${serverIp}:${port}` : `http://localhost:${port}`;
+
+  const systemPrompt = `You are VBS (Virtual Based Scenography) deployment analyzer. Analyze HTTP endpoint test results and give brief, practical feedback.
 
 Keep your response under 200 words. Be direct and actionable.
-Mention: overall status, any failing endpoints, security observations, and quick tips.`;
+Mention: overall status, any failing endpoints, security observations, and quick tips.
+${serverIp ? `Base URL for links: ${baseUrl}` : ''}`;
 
   const summary = testResults
     .map(r => `${r.method} ${r.path}: HTTP ${r.status || 'ERR'} (${r.time}ms) — ${r.passed ? 'PASS' : 'FAIL'} [${r.note}]`)
     .join('\n');
 
-  const userMessage = `API "${projectName}" endpoint test results:\n\n${summary}`;
+  const userMessage = `API "${projectName}" endpoint test results:\n\nBase URL: ${baseUrl}\n\n${summary}`;
 
   return sendMessage(MODELS.HAIKU, systemPrompt, userMessage, 512);
 }
@@ -26,7 +31,7 @@ Mention: overall status, any failing endpoints, security observations, and quick
  * @param {string} projectName
  */
 export async function diagnoseFailure(logs, projectName) {
-  const systemPrompt = `You are CreateMy.api deployment debugger. Analyze Node.js/pm2 startup logs and identify the root cause.
+  const systemPrompt = `You are VBS (Virtual Based Scenography) deployment debugger. Analyze Node.js/pm2 startup logs and identify the root cause.
 
 Be concise (under 150 words). State:
 1. Root cause (one sentence)

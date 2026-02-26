@@ -122,15 +122,21 @@ export async function run(userPrompt, options = {}) {
 
     // Require prompt
     if (!userPrompt || !userPrompt.trim()) {
-      console.log(chalk.yellow('\n  Usage: createmy "description of your API"\n'));
+      console.log(chalk.yellow('\n  Usage: vbs -h -s prompt=\'description of your API\'\n'));
       console.log(chalk.gray('  Examples:'));
-      console.log(chalk.gray('    createmy "REST API for a blog with users, posts and comments"'));
-      console.log(chalk.gray('    createmy "E-commerce API with JWT auth and PostgreSQL"'));
-      console.log(chalk.gray('    createmy "Simple todo list API with SQLite"\n'));
+      console.log(chalk.gray('    vbs prompt=\'REST API for a blog with users, posts and comments\''));
+      console.log(chalk.gray('    vbs -h -s prompt=\'E-commerce API with JWT auth and PostgreSQL\''));
+      console.log(chalk.gray('    vbs -h prompt=\'Simple todo list API with SQLite\'\n'));
       process.exit(0);
     }
 
     log('step', `Prompt: "${chalk.cyan(userPrompt.trim())}"`);
+
+    // Resolve server IPv4 — from env var (preferred) or auto-detect later
+    const serverIp = process.env.SERVER_IPV4 ? process.env.SERVER_IPV4.trim() : null;
+    if (serverIp) {
+      log('success', `Server IP: ${chalk.cyan(serverIp)}`);
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     // PHASE 1: ANALYSIS
@@ -245,7 +251,7 @@ export async function run(userPrompt, options = {}) {
 
     let codeResult;
     try {
-      codeResult = await generateCode(analysis, userAnswers, userPrompt);
+      codeResult = await generateCode(analysis, userAnswers, userPrompt, serverIp);
       spinnerSuccess(codeSpinner, `Generated ${codeResult.files.length} files`);
     } catch (err) {
       spinnerFail(codeSpinner, `Code generation failed: ${err.message}`);
@@ -364,7 +370,7 @@ export async function run(userPrompt, options = {}) {
     if (testResults.length > 0) {
       const noteSpinner = createSpinner('Analyzing test results...', 'AI thinking');
       noteSpinner.start();
-      aiNotes = await analyzeTestResults(testResults, projectName);
+      aiNotes = await analyzeTestResults(testResults, projectName, serverIp, port);
       spinnerSuccess(noteSpinner, 'Analysis complete');
 
       console.log('\n' + chalk.bold.cyan('  AI Notes:'));
@@ -389,6 +395,7 @@ export async function run(userPrompt, options = {}) {
         testResults,
         aiNotes,
         answers:     userAnswers,
+        serverIp,
         version:     pkg.version,
       });
 

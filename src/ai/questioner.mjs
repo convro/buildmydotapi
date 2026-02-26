@@ -1,6 +1,6 @@
 import { sendMessage, extractJSON, MODELS } from './client.mjs';
 
-const SYSTEM_PROMPT = `You are CreateMy.api. Based on the analyzed API request, generate 5-12 precise technical configuration questions.
+const SYSTEM_PROMPT = `You are VBS (Virtual Based Scenography). Based on the analyzed API request, generate 5-12 precise technical configuration questions.
 
 ALWAYS include questions about:
 - Port number (id: "port", type: "input", default: "3000", validate: "port_number")
