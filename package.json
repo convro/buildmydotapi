@@ -1,0 +1,40 @@
+{
+  "name": "createmy-api",
+  "version": "1.0.0",
+  "description": "AI-powered REST API deployment CLI for Ubuntu VPS",
+  "type": "module",
+  "bin": {
+    "createmy": "./bin/createmy.mjs"
+  },
+  "scripts": {
+    "start": "node bin/createmy.mjs",
+    "link": "npm link"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "cli",
+    "api",
+    "vps",
+    "ubuntu",
+    "ai",
+    "rest",
+    "deepseek",
+    "deployment"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "openai": "^4.77.0",
+    "boxen": "^8.0.0",
+    "chalk": "^5.3.0",
+    "cli-table3": "^0.6.3",
+    "commander": "^12.0.0",
+    "dotenv": "^16.4.5",
+    "execa": "^9.3.0",
+    "figures": "^6.1.0",
+    "gradient-string": "^2.0.2",
+    "inquirer": "^9.2.12",
+    "ora": "^8.1.0"
+  }
+}
