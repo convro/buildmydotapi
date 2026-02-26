@@ -106,7 +106,9 @@ Generate precise technical configuration questions for this ${projectType} proje
 Make sure questions reflect the specific tech in the analysis (e.g. if PostgreSQL detected, ask DB questions).
 For frontend_framework default, use: ${analysis.frontendFramework === 'nextjs' ? '"Next.js (SSR/SSG)"' : '"React (Vite SPA)"'}.`;
 
-  const text   = await sendMessage(MODELS.OPUS, systemPrompt, userMessage, 2048);
+  // 6000 tokens — fullstack generates 10-16 questions, each with multiple fields
+  // sendMessage auto-retries with 2× tokens if finish_reason === 'length'
+  const text   = await sendMessage(MODELS.OPUS, systemPrompt, userMessage, 6000);
   const parsed = extractJSON(text);
   return parsed.questions;
 }

@@ -62,6 +62,7 @@ export async function analyzeRequest(userPrompt, projectType = 'api') {
   const addon        = TYPE_ADDONS[projectType] || TYPE_ADDONS.api;
   const systemPrompt = BASE_SYSTEM + '\n' + addon;
 
-  const text = await sendMessage(MODELS.OPUS, systemPrompt, userPrompt, 1024);
+  // 2048 tokens — analysis JSON is small but give margin for R1 reasoning overhead
+  const text = await sendMessage(MODELS.OPUS, systemPrompt, userPrompt, 2048);
   return extractJSON(text);
 }
