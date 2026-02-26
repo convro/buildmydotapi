@@ -1,45 +1,67 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 
 let _client = null;
 
+// DeepSeek models via OpenAI-compatible API
+// OPUS  → deepseek-reasoner (R1) — best reasoning + code generation
+// HAIKU → deepseek-chat    (V3) — fast, high-quality for quick tasks
 export const MODELS = {
-  OPUS:  process.env.AI_MODEL_OPUS  || 'claude-opus-4-5',
-  HAIKU: process.env.AI_MODEL_HAIKU || 'claude-haiku-4-5-20251001',
+  OPUS:  process.env.AI_MODEL_OPUS  || 'deepseek-reasoner',
+  HAIKU: process.env.AI_MODEL_HAIKU || 'deepseek-chat',
 };
 
 export function getClient() {
   if (!_client) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiKey = process.env.DEEPSEEK_API_KEY;
     if (!apiKey) {
       throw new Error(
-        'ANTHROPIC_API_KEY not found.\n' +
+        'DEEPSEEK_API_KEY not found.\n' +
         'Set it in your .env file or run:\n' +
-        '  export ANTHROPIC_API_KEY=sk-ant-...'
+        '  export DEEPSEEK_API_KEY=sk-...\n' +
+        'Get your key at: https://platform.deepseek.com/'
       );
     }
-    _client = new Anthropic({ apiKey });
+    _client = new OpenAI({
+      apiKey,
+      baseURL: 'https://api.deepseek.com',
+    });
   }
   return _client;
 }
 
 /**
- * Send a single-turn message to the Anthropic API and return the text.
+ * Send a single-turn message to the DeepSeek API and return the response text.
+ *
+ * Uses deepseek-reasoner (R1) for MODELS.OPUS — the most capable model.
+ * R1 performs chain-of-thought reasoning internally; temperature is fixed.
+ *
+ * Uses deepseek-chat (V3) for MODELS.HAIKU — fast, still excellent quality.
+ *
  * @param {string} model
  * @param {string} systemPrompt
  * @param {string} userMessage
- * @param {number} [maxTokens=4096]
+ * @param {number} [maxTokens=8192]
  */
-export async function sendMessage(model, systemPrompt, userMessage, maxTokens = 4096) {
+export async function sendMessage(model, systemPrompt, userMessage, maxTokens = 8192) {
   const client = getClient();
 
-  const response = await client.messages.create({
+  const params = {
     model,
     max_tokens: maxTokens,
-    system:     systemPrompt,
-    messages:   [{ role: 'user', content: userMessage }],
-  });
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user',   content: userMessage  },
+    ],
+  };
 
-  return response.content[0].text;
+  // deepseek-chat supports temperature; use 0 for deterministic output
+  // deepseek-reasoner (R1) does not accept temperature — omit it
+  if (model === 'deepseek-chat' || model === process.env.AI_MODEL_HAIKU) {
+    params.temperature = 0;
+  }
+
+  const response = await client.chat.completions.create(params);
+  return response.choices[0].message.content;
 }
 
 /**

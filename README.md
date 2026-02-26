@@ -30,7 +30,7 @@ createmy "REST API for an e-commerce store with JWT auth and PostgreSQL"
 | OS | Ubuntu 20.04+ (root recommended) |
 | Node.js | v18+ (v20 recommended) |
 | npm | v8+ |
-| Anthropic key | `ANTHROPIC_API_KEY` from [console.anthropic.com](https://console.anthropic.com/) |
+| DeepSeek key | `DEEPSEEK_API_KEY` from [platform.deepseek.com](https://platform.deepseek.com/) |
 
 ---
 
@@ -130,16 +130,18 @@ createmy-api/
 
 | Task | Model |
 |---|---|
-| Request analysis | `claude-opus-4-5` |
-| Question generation | `claude-opus-4-5` |
-| Code generation | `claude-opus-4-5` |
-| Test analysis | `claude-haiku-4-5-20251001` |
-| Failure diagnosis | `claude-haiku-4-5-20251001` |
+| Request analysis | `deepseek-reasoner` (R1) |
+| Question generation | `deepseek-reasoner` (R1) |
+| Code generation | `deepseek-reasoner` (R1) |
+| Test analysis | `deepseek-chat` (V3) |
+| Failure diagnosis | `deepseek-chat` (V3) |
+
+`deepseek-reasoner` is DeepSeek-R1 — chain-of-thought reasoning model, best for analysis and code generation. `deepseek-chat` is DeepSeek-V3 — fast and capable, used for quick tasks.
 
 Override in `.env`:
 ```
-AI_MODEL_OPUS=claude-opus-4-5
-AI_MODEL_HAIKU=claude-haiku-4-5-20251001
+AI_MODEL_OPUS=deepseek-reasoner
+AI_MODEL_HAIKU=deepseek-chat
 ```
 
 ---
@@ -148,11 +150,11 @@ AI_MODEL_HAIKU=claude-haiku-4-5-20251001
 
 ```env
 # Required
-ANTHROPIC_API_KEY=sk-ant-api03-...
+DEEPSEEK_API_KEY=sk-...
 
 # Optional model overrides
-AI_MODEL_OPUS=claude-opus-4-5
-AI_MODEL_HAIKU=claude-haiku-4-5-20251001
+AI_MODEL_OPUS=deepseek-reasoner
+AI_MODEL_HAIKU=deepseek-chat
 ```
 
 ---

@@ -94,19 +94,19 @@ export async function run(userPrompt, options = {}) {
     showTitleScreen(pkg.version);
 
     // Check API key
-    if (!process.env.ANTHROPIC_API_KEY) {
+    if (!process.env.DEEPSEEK_API_KEY) {
       showErrorBox(
-        'Missing ANTHROPIC_API_KEY',
+        'Missing DEEPSEEK_API_KEY',
         [
-          'ANTHROPIC_API_KEY not set!',
+          'DEEPSEEK_API_KEY not set!',
           '',
           'Add it to your .env file:',
-          '  ANTHROPIC_API_KEY=sk-ant-api03-...',
+          '  DEEPSEEK_API_KEY=sk-...',
           '',
           'Or export it in your shell:',
-          '  export ANTHROPIC_API_KEY=sk-ant-api03-...',
+          '  export DEEPSEEK_API_KEY=sk-...',
           '',
-          'Get your key at: https://console.anthropic.com/',
+          'Get your key at: https://platform.deepseek.com/',
         ].join('\n')
       );
       process.exit(1);
