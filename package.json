@@ -1,13 +1,13 @@
 {
-  "name": "createmy-api",
-  "version": "1.0.0",
-  "description": "AI-powered REST API deployment CLI for Ubuntu VPS",
+  "name": "vbs",
+  "version": "1.9.0",
+  "description": "VBS — Virtual Based Scenography. AI-powered REST API deployment CLI for Ubuntu VPS",
   "type": "module",
   "bin": {
-    "createmy": "./bin/createmy.mjs"
+    "vbs": "./bin/vbs.mjs"
   },
   "scripts": {
-    "start": "node bin/createmy.mjs",
+    "start": "node bin/vbs.mjs",
     "link": "npm link"
   },
   "engines": {
@@ -21,7 +21,9 @@
     "ai",
     "rest",
     "deepseek",
-    "deployment"
+    "deployment",
+    "vbs",
+    "virtual-based-scenography"
   ],
   "license": "MIT",
   "dependencies": {

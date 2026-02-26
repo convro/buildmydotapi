@@ -114,9 +114,11 @@ export async function generateSummary({
   testResults,
   aiNotes,
   answers,
-  version = '1.0.0',
+  serverIp: providedIp = null,
+  version = '1.9.0',
 }) {
-  const serverIp = await getServerIP();
+  // Use explicitly set SERVER_IPV4 env var, then caller-provided IP, then auto-detect
+  const serverIp = process.env.SERVER_IPV4?.trim() || providedIp || await getServerIP();
   const now      = new Date();
   const dateStr  = now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   const line     = '═'.repeat(51);
@@ -132,7 +134,7 @@ export async function generateSummary({
   }
 
   const summary = `${line}
-  CreateMy.api — Deployment Summary
+  VBS — Virtual Based Scenography | Deployment Summary
   Generated: ${dateStr}
 ${line}
 
@@ -164,8 +166,7 @@ ENVIRONMENT
   - ${envVarNames.join('\n  - ')}
 
 ${line}
-  Created with CreateMy.api v${version}
-  https://github.com/createmy-api/createmy-api
+  Created with VBS — Virtual Based Scenography v${version}
 ${line}
 `;
 

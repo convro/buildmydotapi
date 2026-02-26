@@ -1,6 +1,6 @@
 import { sendMessage, extractJSON, MODELS } from './client.mjs';
 
-const SYSTEM_PROMPT = `You are CreateMy.api, an AI that analyzes user requests to build REST APIs on Ubuntu VPS.
+const SYSTEM_PROMPT = `You are VBS (Virtual Based Scenography), an AI that analyzes user requests to build REST APIs on Ubuntu VPS.
 
 When given a user's request, analyze it and return ONLY valid JSON (no markdown, no explanation):
 

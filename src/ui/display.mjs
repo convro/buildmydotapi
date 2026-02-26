@@ -6,16 +6,16 @@ import figures from 'figures';
 
 // ─── Title Screen ────────────────────────────────────────────────────────────
 
-export function showTitleScreen(version = '1.0.0') {
+export function showTitleScreen(version = '1.9.0') {
   console.clear();
 
   const ascii = [
-    ' ██████╗██████╗ ███████╗ █████╗ ████████╗███████╗',
-    '██╔════╝██╔══██╗██╔════╝██╔══██╗╚══██╔══╝██╔════╝',
-    '██║     ██████╔╝█████╗  ███████║   ██║   █████╗  ',
-    '██║     ██╔══██╗██╔══╝  ██╔══██║   ██║   ██╔══╝  ',
-    '╚██████╗██║  ██║███████╗██║  ██║   ██║   ███████╗',
-    ' ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝',
+    '██╗   ██╗██████╗ ███████╗',
+    '██║   ██║██╔══██╗██╔════╝',
+    '██║   ██║██████╔╝███████╗',
+    '╚██╗ ██╔╝██╔══██╗╚════██║',
+    ' ╚████╔╝ ██████╔╝███████║',
+    '  ╚═══╝  ╚═════╝ ╚══════╝',
   ].join('\n');
 
   const cyanMagenta = gradient(['cyan', 'magenta']);
@@ -23,7 +23,7 @@ export function showTitleScreen(version = '1.0.0') {
   const inner =
     cyanMagenta(ascii) +
     '\n\n' +
-    chalk.bold.white(`            CreateMy.api  v${version}`) +
+    chalk.bold.white(`       Virtual Based Scenography  v${version}`) +
     '\n' +
     chalk.gray('      AI-powered API deployment for your VPS') +
     '\n';
@@ -180,6 +180,8 @@ export function showSuccessBox(projectName, port, projectDir) {
     '',
     `  ${chalk.gray('Logs:')}    ${chalk.cyan(`pm2 logs ${projectName}`)}`,
     `  ${chalk.gray('Summary:')} ${chalk.cyan('summary.txt')} ${chalk.gray('(current dir)')}`,
+    '',
+    chalk.gray(`  VBS — Virtual Based Scenography`),
   ].join('\n');
 
   console.log(
