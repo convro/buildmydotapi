@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'url';
 import { dirname, join }  from 'path';
 import { promises as fs } from 'fs';
-import chalk from 'chalk';
+import chalk   from 'chalk';
 import figures from 'figures';
 
 // ── UI ────────────────────────────────────────────────────────────────────────
@@ -20,12 +20,22 @@ import { generateCode }                       from './ai/codegen.mjs';
 import { analyzeTestResults, diagnoseFailure } from './ai/tester.mjs';
 
 // ── System ────────────────────────────────────────────────────────────────────
-import { exec, shell }                                    from './system/executor.mjs';
-import { setupFirewall }                                  from './system/firewall.mjs';
+import { exec }                                  from './system/executor.mjs';
+import { setupFirewall }                         from './system/firewall.mjs';
 import { checkNode, checkNpm, checkPm2,
-         checkPostgres, setupDatabase }                   from './system/node-check.mjs';
-import { writeProjectFiles }                              from './system/writer.mjs';
-import { testAllEndpoints }                               from './system/tester.mjs';
+         checkPostgres, setupDatabase }          from './system/node-check.mjs';
+import { writeProjectFiles }                     from './system/writer.mjs';
+import { testAllEndpoints }                      from './system/tester.mjs';
+import {
+  checkNginx,
+  configureApiProxy,
+  configureStaticFrontend,
+  configureFullstack,
+}                                                from './system/nginx.mjs';
+
+// ── Projects ──────────────────────────────────────────────────────────────────
+import { registerProject }    from './projects/registry.mjs';
+import { writeConfigVbs }     from './projects/config.mjs';
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 import { generateSummary, writeSummaryFiles } from './summary/generator.mjs';
@@ -43,62 +53,118 @@ function generatePassword(len = 20) {
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
-/**
- * Parse a startCommand string into pm2 arguments.
- * Returns an array of args to append after "pm2 start".
- */
 function buildPm2StartArgs(startCommand, pm2Name, projectDir) {
   const parts = startCommand.trim().split(/\s+/);
 
   if (parts[0] === 'npm') {
-    // npm start  →  pm2 start npm --name X --cwd D -- start
     return ['npm', '--name', pm2Name, '--cwd', projectDir, '--', ...parts.slice(1)];
   }
-
   if (parts[0] === 'node') {
-    // node src/index.js  →  pm2 start src/index.js --name X --cwd D
     const script = parts.slice(1).join(' ') || 'src/index.js';
     return [script, '--name', pm2Name, '--cwd', projectDir];
   }
-
-  // Anything else — treat the first token as the script
   return [parts[0], '--name', pm2Name, '--cwd', projectDir];
 }
 
-/**
- * Check if a named pm2 process is online.
- */
 async function isPm2Online(name) {
   const result = await exec('pm2', ['jlist']);
   if (!result.success || !result.stdout) return false;
-
   try {
     const list = JSON.parse(result.stdout);
     const proc = list.find(p => p.name === name);
     return proc?.pm2_env?.status === 'online';
   } catch {
-    // Fallback: grep the text output
     const textResult = await exec('pm2', ['list', '--no-color']);
     return textResult.stdout.includes(name) && textResult.stdout.includes('online');
   }
 }
 
+async function runNpmInstall(dir, label = '') {
+  const lbl = label ? `${label} ` : '';
+  const npmSpinner = createSpinner(`Running npm install ${lbl}...`);
+  npmSpinner.start();
+
+  const res = await exec('npm', ['install', '--prefer-offline'], { cwd: dir });
+  if (res.success) {
+    spinnerSuccess(npmSpinner, `${lbl}dependencies installed ✓`);
+    return true;
+  }
+  const res2 = await exec('npm', ['install'], { cwd: dir });
+  if (res2.success) {
+    spinnerSuccess(npmSpinner, `${lbl}dependencies installed ✓`);
+    return true;
+  }
+  spinnerWarn(npmSpinner, `npm install had errors ${lbl}— continuing (${res2.stderr.slice(0, 80)})`);
+  return false;
+}
+
+async function launchWithPm2(startCommand, pm2Name, projectDir) {
+  await exec('pm2', ['delete', pm2Name]);
+
+  const launchSpinner = createSpinner(`Starting with pm2: ${chalk.cyan(pm2Name)}...`);
+  launchSpinner.start();
+
+  const pm2Args  = buildPm2StartArgs(startCommand, pm2Name, projectDir);
+  const pm2Start = await exec('pm2', ['start', ...pm2Args]);
+
+  if (!pm2Start.success) {
+    spinnerWarn(launchSpinner, 'Direct start failed — trying ecosystem config...');
+    const { generatePm2Config } = await import('../templates/pm2.config.template.mjs');
+    const configContent = generatePm2Config(pm2Name, startCommand, projectDir);
+    const configPath    = join(projectDir, 'ecosystem.config.js');
+    await fs.writeFile(configPath, configContent, 'utf8');
+    const pm2Eco = await exec('pm2', ['start', configPath]);
+    if (!pm2Eco.success) {
+      spinnerFail(launchSpinner, `Could not start ${pm2Name} — check logs manually`);
+      return false;
+    }
+  }
+
+  await new Promise(r => setTimeout(r, 2500));
+
+  const online = await isPm2Online(pm2Name);
+  if (online) {
+    spinnerSuccess(launchSpinner, chalk.green(`${pm2Name} is ONLINE ✓`));
+    return true;
+  }
+
+  spinnerWarn(launchSpinner, `${pm2Name} may not have started — fetching logs...`);
+
+  const logsResult = await exec('pm2', ['logs', pm2Name, '--lines', '30', '--nostream']);
+  const logs       = (logsResult.stdout + '\n' + logsResult.stderr).trim();
+
+  if (logs) {
+    console.log(chalk.gray('\n  ── Recent Logs ───────────────────────────\n'));
+    console.log(chalk.gray('  ' + logs.split('\n').slice(-15).join('\n  ')));
+    console.log('');
+
+    const diagSpinner = createSpinner('AI diagnosing startup issue...', 'AI thinking');
+    diagSpinner.start();
+    const diagnosis = await diagnoseFailure(logs, pm2Name);
+    spinnerSuccess(diagSpinner, 'Diagnosis ready');
+    console.log('\n' + chalk.bold.yellow('  AI Diagnosis:'));
+    console.log(chalk.gray('  ' + diagnosis.split('\n').join('\n  ')) + '\n');
+  }
+
+  return false;
+}
+
 // ─── Main Entry Point ─────────────────────────────────────────────────────────
 
 export async function run(userPrompt, options = {}) {
-  try {
+  const projectType = (options.type || 'api').toLowerCase();
 
+  try {
     // ══════════════════════════════════════════════════════════════════════════
     // PHASE 0: STARTUP
     // ══════════════════════════════════════════════════════════════════════════
     showTitleScreen(pkg.version);
 
-    // Check API key
     if (!process.env.DEEPSEEK_API_KEY) {
       showErrorBox(
         'Missing DEEPSEEK_API_KEY',
         [
-          'DEEPSEEK_API_KEY not set!',
+          'DEEPSEEK_API_KEY is not set!',
           '',
           'Add it to your .env file:',
           '  DEEPSEEK_API_KEY=sk-...',
@@ -112,28 +178,35 @@ export async function run(userPrompt, options = {}) {
       process.exit(1);
     }
 
-    // Root check
     const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
     if (isRoot) {
       log('success', 'Running as root ✓');
     } else {
-      log('warning', 'Not running as root — firewall and system package installation may be limited');
+      log('warning', 'Not root — firewall/nginx/system package setup may be limited');
     }
 
-    // Require prompt
+    const typeLabel =
+      projectType === 'fullstack' ? chalk.green('fullstack (API + Frontend + nginx)') :
+      projectType === 'frontend'  ? chalk.magenta('frontend (React/Next.js)') :
+      chalk.cyan('api (REST API)');
+
+    log('info', `Build type: ${typeLabel}`);
+
     if (!userPrompt || !userPrompt.trim()) {
-      console.log(chalk.yellow('\n  Usage: vbs -h -s prompt=\'description of your API\'\n'));
-      console.log(chalk.gray('  Examples:'));
-      console.log(chalk.gray('    vbs prompt=\'REST API for a blog with users, posts and comments\''));
-      console.log(chalk.gray('    vbs -h -s prompt=\'E-commerce API with JWT auth and PostgreSQL\''));
-      console.log(chalk.gray('    vbs -h prompt=\'Simple todo list API with SQLite\'\n'));
+      console.log('\n' + chalk.yellow('  Usage:'));
+      console.log(chalk.gray('    vbs prompt=\'REST API for a blog\''));
+      console.log(chalk.gray('    vbs -h -s --type=frontend prompt=\'Dashboard app with React\''));
+      console.log(chalk.gray('    vbs -h -s --type=fullstack prompt=\'Blog with admin panel\'\n'));
+      console.log(chalk.gray('  Management:'));
+      console.log(chalk.gray('    vbs list'));
+      console.log(chalk.gray('    vbs open <name>'));
+      console.log(chalk.gray('    vbs modify <name> prompt=\'add feature\'\n'));
       process.exit(0);
     }
 
     log('step', `Prompt: "${chalk.cyan(userPrompt.trim())}"`);
 
-    // Resolve server IPv4 — from env var (preferred) or auto-detect later
-    const serverIp = process.env.SERVER_IPV4 ? process.env.SERVER_IPV4.trim() : null;
+    const serverIp = process.env.SERVER_IPV4?.trim() || null;
     if (serverIp) {
       log('success', `Server IP: ${chalk.cyan(serverIp)}`);
     }
@@ -143,19 +216,19 @@ export async function run(userPrompt, options = {}) {
     // ══════════════════════════════════════════════════════════════════════════
     showPhaseHeader(1, 'ANALYSIS');
 
-    const analysisSpinner = createSpinner('Analyzing your request...', 'AI thinking');
+    const analysisSpinner = createSpinner('AI analyzing your request...', 'AI thinking');
     analysisSpinner.start();
 
     let analysis;
     try {
-      analysis = await analyzeRequest(userPrompt);
+      analysis = await analyzeRequest(userPrompt, projectType);
       spinnerSuccess(analysisSpinner, 'Analysis complete');
     } catch (err) {
       spinnerFail(analysisSpinner, `Analysis failed: ${err.message}`);
       throw err;
     }
 
-    showAnalysis(analysis);
+    showAnalysis(analysis, projectType);
 
     // ══════════════════════════════════════════════════════════════════════════
     // PHASE 2: CONFIGURATION
@@ -167,8 +240,8 @@ export async function run(userPrompt, options = {}) {
 
     let questions;
     try {
-      questions = await generateQuestions(analysis, userPrompt);
-      spinnerSuccess(questionSpinner, `Generated ${questions.length} questions`);
+      questions = await generateQuestions(analysis, userPrompt, projectType);
+      spinnerSuccess(questionSpinner, `${questions.length} questions generated`);
     } catch (err) {
       spinnerFail(questionSpinner, `Failed to generate questions: ${err.message}`);
       throw err;
@@ -178,15 +251,23 @@ export async function run(userPrompt, options = {}) {
 
     const userAnswers = await askAllQuestions(questions);
 
-    // Resolve key config values
-    const port        = String(userAnswers.port || '3000');
     const projectName = userAnswers.project_name || analysis.suggestedProjectName;
+    const projectDir  = await askProjectDirectory(projectName);
 
-    // Ask for project directory
-    const projectDir      = await askProjectDirectory(projectName);
     userAnswers.projectDir  = projectDir;
     userAnswers.projectName = projectName;
-    userAnswers.port        = port;
+
+    // Type-specific port handling
+    if (projectType === 'api') {
+      userAnswers.port = String(userAnswers.port || userAnswers.backend_port || '3000');
+    } else if (projectType === 'fullstack') {
+      userAnswers.backendPort  = String(userAnswers.backend_port  || userAnswers.port || '3001');
+      userAnswers.frontendPort = String(userAnswers.frontend_port || '3000');
+      userAnswers.port = userAnswers.backendPort;
+    } else {
+      // frontend
+      userAnswers.port = String(userAnswers.port || userAnswers.frontend_port || '3000');
+    }
 
     showAnswersSummary(questions, userAnswers);
 
@@ -197,28 +278,38 @@ export async function run(userPrompt, options = {}) {
 
     await checkNode();
     await checkNpm();
-    await checkPm2();
 
+    // pm2 needed for api/fullstack; also for Next.js frontend
+    const needsPm2 = projectType !== 'frontend' || analysis.frontendFramework === 'nextjs';
+    if (needsPm2) await checkPm2();
+
+    // nginx for frontend/fullstack
+    const needsNginx = projectType === 'frontend' || projectType === 'fullstack';
+    if (needsNginx) await checkNginx(isRoot);
+
+    // Firewall
     if (isRoot) {
-      await setupFirewall(port);
+      const portsToOpen = [];
+      if (projectType === 'api')       portsToOpen.push(userAnswers.port);
+      if (projectType === 'fullstack') portsToOpen.push(userAnswers.backendPort, '80');
+      if (projectType === 'frontend')  portsToOpen.push('80');
+      for (const p of portsToOpen) await setupFirewall(p);
     } else {
-      log('warning', `Skipping firewall — not root. Manually run: ufw allow ${port}/tcp`);
+      log('warning', 'Not root — skipping firewall. Run manually: ufw allow 80/tcp');
     }
 
-    // PostgreSQL: detect need
+    // PostgreSQL
     const needsPostgres =
-      analysis.requiredSystemPackages.some(p => p.toLowerCase().includes('postgres')) ||
-      analysis.detectedStack.some(s => s.toLowerCase().includes('postgres'));
+      analysis.requiredSystemPackages?.some(p => p.toLowerCase().includes('postgres')) ||
+      analysis.detectedStack?.some(s => s.toLowerCase().includes('postgres'));
 
     if (needsPostgres) {
       if (isRoot) {
         await checkPostgres();
-
-        // Auto-fill DB credentials if not provided
-        const safeDbBase = projectName.replace(/-/g, '_');
-        const dbName     = userAnswers.database_name || userAnswers.db_name || `${safeDbBase}_db`;
-        const dbUser     = userAnswers.database_user || userAnswers.db_user || `${safeDbBase}_user`;
-        const dbPassword = userAnswers.database_password || userAnswers.db_password || generatePassword();
+        const safeBase   = projectName.replace(/-/g, '_');
+        const dbName     = userAnswers.database_name || `${safeBase}_db`;
+        const dbUser     = userAnswers.database_user || `${safeBase}_user`;
+        const dbPassword = userAnswers.database_password || generatePassword();
 
         userAnswers.database_name     = dbName;
         userAnswers.database_user     = dbUser;
@@ -226,32 +317,32 @@ export async function run(userPrompt, options = {}) {
 
         await setupDatabase(dbName, dbUser, dbPassword);
       } else {
-        log('warning', 'PostgreSQL setup requires root — skipping DB creation. Create it manually.');
+        log('warning', 'PostgreSQL setup requires root — skipping. Create DB manually.');
       }
     }
 
     // Create project directory
     const dirSpinner = createSpinner(`Creating project directory: ${chalk.cyan(projectDir)}...`);
     dirSpinner.start();
-    try {
-      await fs.mkdir(projectDir, { recursive: true });
-      spinnerSuccess(dirSpinner, `Directory ready: ${chalk.cyan(projectDir)}`);
-    } catch (err) {
-      spinnerFail(dirSpinner, `Could not create directory: ${err.message}`);
-      throw err;
-    }
+    await fs.mkdir(projectDir, { recursive: true });
+    spinnerSuccess(dirSpinner, `Directory ready: ${chalk.cyan(projectDir)}`);
 
     // ══════════════════════════════════════════════════════════════════════════
     // PHASE 4: CODE GENERATION
     // ══════════════════════════════════════════════════════════════════════════
     showPhaseHeader(4, 'CODE GENERATION');
 
-    const codeSpinner = createSpinner('Generating your API...', 'AI thinking');
+    const codeSpinner = createSpinner(
+      projectType === 'fullstack' ? 'Generating full-stack project (backend + frontend)...' :
+      projectType === 'frontend'  ? 'Generating frontend app...' :
+      'Generating REST API...',
+      'AI thinking'
+    );
     codeSpinner.start();
 
     let codeResult;
     try {
-      codeResult = await generateCode(analysis, userAnswers, userPrompt, serverIp);
+      codeResult = await generateCode(analysis, userAnswers, userPrompt, serverIp, projectType);
       spinnerSuccess(codeSpinner, `Generated ${codeResult.files.length} files`);
     } catch (err) {
       spinnerFail(codeSpinner, `Code generation failed: ${err.message}`);
@@ -262,151 +353,306 @@ export async function run(userPrompt, options = {}) {
     log('step', 'Writing project files...');
     console.log('');
     await writeProjectFiles(projectDir, codeResult.files);
-    log('success', `All ${codeResult.files.length} files written ✓`);
 
-    // npm install
-    console.log('');
-    const npmSpinner = createSpinner('Running npm install...');
-    npmSpinner.start();
+    // ══════════════════════════════════════════════════════════════════════════
+    // PHASE 5: INSTALL & BUILD
+    // ══════════════════════════════════════════════════════════════════════════
+    showPhaseHeader(5, 'INSTALL & BUILD');
 
-    const npmResult = await exec('npm', ['install', '--prefer-offline'], { cwd: projectDir });
-    if (npmResult.success) {
-      spinnerSuccess(npmSpinner, 'Dependencies installed ✓');
-    } else {
-      // Try again without --prefer-offline
-      const npmResult2 = await exec('npm', ['install'], { cwd: projectDir });
-      if (npmResult2.success) {
-        spinnerSuccess(npmSpinner, 'Dependencies installed ✓');
+    if (projectType === 'api') {
+      await runNpmInstall(projectDir);
+    }
+
+    if (projectType === 'frontend') {
+      await runNpmInstall(projectDir, 'frontend');
+
+      // Build step
+      const buildSpinner = createSpinner('Building frontend for production...', 'npm run build');
+      buildSpinner.start();
+      const buildResult = await exec('npm', ['run', 'build'], { cwd: projectDir });
+      if (buildResult.success) {
+        spinnerSuccess(buildSpinner, 'Frontend built successfully ✓');
       } else {
-        spinnerWarn(npmSpinner, `npm install reported errors — continuing (${npmResult2.stderr.slice(0, 80)})`);
+        spinnerFail(buildSpinner, `Build had errors:\n${buildResult.stderr.slice(0, 200)}`);
+        log('warning', 'Continuing despite build errors — check manually');
+      }
+    }
+
+    if (projectType === 'fullstack') {
+      const backendDir  = join(projectDir, 'backend');
+      const frontendDir = join(projectDir, 'frontend');
+
+      await runNpmInstall(backendDir, 'backend');
+      await runNpmInstall(frontendDir, 'frontend');
+
+      // Build frontend
+      const buildSpinner = createSpinner('Building frontend for production...', 'npm run build');
+      buildSpinner.start();
+      const buildResult = await exec('npm', ['run', 'build'], { cwd: frontendDir });
+      if (buildResult.success) {
+        spinnerSuccess(buildSpinner, 'Frontend built ✓');
+      } else {
+        spinnerWarn(buildSpinner, 'Frontend build had errors — check manually');
       }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PHASE 5: LAUNCH
+    // PHASE 6: LAUNCH
     // ══════════════════════════════════════════════════════════════════════════
-    showPhaseHeader(5, 'LAUNCHING API');
+    showPhaseHeader(6, 'LAUNCHING');
 
     const pm2Name      = codeResult.pm2Name || projectName;
     const startCommand = codeResult.startCommand || 'node src/index.js';
 
-    // Cleanup any stale pm2 process
-    await exec('pm2', ['delete', pm2Name]);
+    let backendOnline  = false;
+    let frontendOnline = false;
+    let nginxConfigPath = null;
 
-    const launchSpinner = createSpinner(`Starting API with pm2 (${pm2Name})...`);
-    launchSpinner.start();
+    if (projectType === 'api') {
+      backendOnline = await launchWithPm2(startCommand, pm2Name, projectDir);
+    }
 
-    const pm2Args  = buildPm2StartArgs(startCommand, pm2Name, projectDir);
-    const pm2Start = await exec('pm2', ['start', ...pm2Args]);
+    if (projectType === 'frontend') {
+      const framework   = codeResult.frontendFramework || userAnswers.frontend_framework || 'react';
+      const isNextJs    = framework === 'nextjs' || framework === 'next';
 
-    if (!pm2Start.success) {
-      spinnerFail(launchSpinner, `pm2 start failed: ${pm2Start.stderr.slice(0, 100)}`);
-      log('warning', 'Trying alternative start method...');
-
-      // Fallback: write ecosystem config and use pm2 start ecosystem.config.js
-      const { generatePm2Config } = await import('../templates/pm2.config.template.mjs');
-      const configContent = generatePm2Config(pm2Name, startCommand, projectDir);
-      const configPath    = join(projectDir, 'ecosystem.config.js');
-      await fs.writeFile(configPath, configContent, 'utf8');
-
-      const pm2Eco = await exec('pm2', ['start', configPath]);
-      if (!pm2Eco.success) {
-        spinnerFail(launchSpinner, 'Could not start API — check logs manually');
+      if (isNextJs) {
+        // Next.js: pm2 runs next start
+        const pm2Front = codeResult.pm2Name || `${projectName}-front`;
+        frontendOnline = await launchWithPm2(
+          codeResult.startCommand || 'npm start',
+          pm2Front,
+          projectDir
+        );
+        // nginx proxies to Next.js
+        if (isRoot) {
+          nginxConfigPath = await configureApiProxy({
+            name:        projectName,
+            backendPort: parseInt(userAnswers.port || '3000'),
+          });
+        }
+      } else {
+        // React SPA: nginx serves static files from dist/
+        const buildDir = join(projectDir, 'dist');
+        if (isRoot) {
+          nginxConfigPath = await configureStaticFrontend({
+            name:     projectName,
+            buildDir,
+          });
+        } else {
+          log('warning', 'Not root — skipping nginx setup. Serve dist/ manually.');
+        }
+        frontendOnline = true;
       }
     }
 
-    // Wait for startup
-    await new Promise(r => setTimeout(r, 2500));
+    if (projectType === 'fullstack') {
+      const backendDir  = join(projectDir, 'backend');
+      const frontendDir = join(projectDir, 'frontend');
 
-    const online = await isPm2Online(pm2Name);
+      const backendPm2  = codeResult.backendPm2Name  || `${projectName}-api`;
+      const frontendPm2 = codeResult.frontendPm2Name || `${projectName}-front`;
+      const backPort    = parseInt(userAnswers.backendPort  || '3001');
+      const frontPort   = parseInt(userAnswers.frontendPort || '3000');
 
-    if (online) {
-      spinnerSuccess(launchSpinner, chalk.green(`API is ONLINE ✓  pm2 name: ${pm2Name}`));
-    } else {
-      spinnerWarn(launchSpinner, 'API may not have started correctly — fetching logs...');
+      const backCmd  = codeResult.backendStartCommand  || 'node src/index.js';
+      const frontCmd = codeResult.frontendStartCommand || 'npm start';
 
-      const logsResult = await exec('pm2', ['logs', pm2Name, '--lines', '30', '--nostream']);
-      const logs       = (logsResult.stdout + '\n' + logsResult.stderr).trim();
+      backendOnline  = await launchWithPm2(backCmd, backendPm2, backendDir);
 
-      if (logs) {
-        console.log(chalk.gray('\n  ── Recent Logs ───────────────────────────\n'));
-        console.log(chalk.gray('  ' + logs.split('\n').slice(-20).join('\n  ')));
-        console.log('');
+      const framework = codeResult.frontendFramework || userAnswers.frontend_framework || 'react';
+      const isNextJs  = framework === 'nextjs' || framework === 'next';
 
-        const diagSpinner = createSpinner('AI diagnosing startup issue...', 'AI thinking');
-        diagSpinner.start();
-        const diagnosis = await diagnoseFailure(logs, projectName);
-        spinnerSuccess(diagSpinner, 'Diagnosis complete');
-
-        console.log('\n' + chalk.bold.yellow('  AI Diagnosis:'));
-        console.log(chalk.gray('  ' + diagnosis.split('\n').join('\n  ')) + '\n');
+      if (isNextJs) {
+        frontendOnline = await launchWithPm2(frontCmd, frontendPm2, frontendDir);
+        if (isRoot) {
+          nginxConfigPath = await configureFullstack({
+            name:          projectName,
+            backendPort:   backPort,
+            frontendMode:  'nextjs',
+            frontendPort:  frontPort,
+          });
+        }
+      } else {
+        // React SPA — built static files
+        const buildDir = join(frontendDir, 'dist');
+        if (isRoot) {
+          nginxConfigPath = await configureFullstack({
+            name:         projectName,
+            backendPort:  backPort,
+            frontendMode: 'static',
+            buildDir,
+          });
+        } else {
+          log('warning', 'Not root — skipping nginx. Configure manually.');
+        }
+        frontendOnline = true;
       }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PHASE 6: TESTING ENDPOINTS
+    // PHASE 7: TESTING ENDPOINTS
     // ══════════════════════════════════════════════════════════════════════════
-    showPhaseHeader(6, 'TESTING ENDPOINTS');
-
-    const baseUrl   = `http://localhost:${port}`;
-    const endpoints = codeResult.allEndpoints || [];
-
-    log('step', `Testing ${endpoints.length} endpoint(s) at ${chalk.cyan(baseUrl)}...`);
-    console.log('');
-
-    // Extra wait to ensure the server is fully up
-    await new Promise(r => setTimeout(r, 1500));
-
     let testResults = [];
-    if (endpoints.length > 0) {
-      testResults = await testAllEndpoints(baseUrl, endpoints);
-      showTestResults(testResults);
-    } else {
-      log('warning', 'No endpoints defined — skipping tests');
-    }
+    let aiNotes     = '';
 
-    // AI test analysis
-    let aiNotes = '';
-    if (testResults.length > 0) {
-      const noteSpinner = createSpinner('Analyzing test results...', 'AI thinking');
-      noteSpinner.start();
-      aiNotes = await analyzeTestResults(testResults, projectName, serverIp, port);
-      spinnerSuccess(noteSpinner, 'Analysis complete');
+    if (projectType !== 'frontend') {
+      showPhaseHeader(7, 'TESTING ENDPOINTS');
 
-      console.log('\n' + chalk.bold.cyan('  AI Notes:'));
-      console.log(chalk.gray('  ' + aiNotes.split('\n').join('\n  ')) + '\n');
+      const port      = userAnswers.backendPort || userAnswers.port || '3000';
+      const baseUrl   = `http://localhost:${port}`;
+      const endpoints = codeResult.allEndpoints || [];
+
+      log('step', `Testing ${endpoints.length} endpoint(s) at ${chalk.cyan(baseUrl)}...`);
+      console.log('');
+      await new Promise(r => setTimeout(r, 1500));
+
+      if (endpoints.length > 0) {
+        testResults = await testAllEndpoints(baseUrl, endpoints);
+        showTestResults(testResults);
+      } else {
+        log('warning', 'No endpoints defined — skipping tests');
+      }
+
+      if (testResults.length > 0) {
+        const noteSpinner = createSpinner('AI analyzing test results...', 'AI thinking');
+        noteSpinner.start();
+        aiNotes = await analyzeTestResults(testResults, projectName, serverIp, port);
+        spinnerSuccess(noteSpinner, 'Analysis complete');
+
+        console.log('\n' + chalk.bold.cyan('  AI Notes:'));
+        console.log(chalk.gray('  ' + aiNotes.split('\n').join('\n  ')) + '\n');
+      }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PHASE 7: SUMMARY
+    // PHASE 8: SAVE PROJECT + SUMMARY
     // ══════════════════════════════════════════════════════════════════════════
-    showPhaseHeader(7, 'GENERATING SUMMARY');
+    showPhaseHeader(8, 'SAVING PROJECT & SUMMARY');
 
+    const createdAt = new Date().toISOString();
+
+    // Determine backend/frontend config objects for config.vbs
+    let backendConfig  = null;
+    let frontendConfig = null;
+
+    if (projectType === 'api') {
+      backendConfig = {
+        port:         parseInt(userAnswers.port),
+        framework:    'express',
+        startCommand,
+        pm2Name,
+      };
+    }
+
+    if (projectType === 'frontend') {
+      frontendConfig = {
+        port:       parseInt(userAnswers.port),
+        framework:  codeResult.frontendFramework || userAnswers.frontend_framework || 'react',
+        pm2Name:    codeResult.pm2Name || `${projectName}-front`,
+        buildCommand: 'npm run build',
+      };
+    }
+
+    if (projectType === 'fullstack') {
+      backendConfig = {
+        port:         parseInt(userAnswers.backendPort || '3001'),
+        framework:    'express',
+        startCommand: codeResult.backendStartCommand || 'node src/index.js',
+        pm2Name:      codeResult.backendPm2Name || `${projectName}-api`,
+      };
+      frontendConfig = {
+        port:         parseInt(userAnswers.frontendPort || '3000'),
+        framework:    codeResult.frontendFramework || userAnswers.frontend_framework || 'react',
+        pm2Name:      codeResult.frontendPm2Name || `${projectName}-front`,
+        buildCommand: 'npm run build',
+      };
+    }
+
+    // config.vbs
+    const configVbs = {
+      vbs:       pkg.version,
+      name:      projectName,
+      type:      projectType,
+      createdAt,
+      updatedAt: createdAt,
+      prompt:    userPrompt.trim(),
+      stack:     analysis.detectedStack || [],
+      backend:   backendConfig,
+      frontend:  frontendConfig,
+      server: {
+        ip:          serverIp || null,
+        nginxConfig: nginxConfigPath || null,
+      },
+      answers:   {
+        ...userAnswers,
+        // strip passwords from stored answers for security
+        database_password: userAnswers.database_password ? '[set]' : undefined,
+      },
+      endpoints: codeResult.allEndpoints || [],
+      files:     codeResult.files.map(f => f.path),
+    };
+
+    const configSpinner = createSpinner('Writing config.vbs...');
+    configSpinner.start();
+    try {
+      await writeConfigVbs(projectDir, configVbs);
+      spinnerSuccess(configSpinner, `config.vbs saved → ${chalk.cyan(projectDir + '/config.vbs')}`);
+    } catch (err) {
+      spinnerFail(configSpinner, `config.vbs write failed: ${err.message}`);
+    }
+
+    // Register in global registry
+    await registerProject({
+      name:      projectName,
+      dir:       projectDir,
+      type:      projectType,
+      stack:     analysis.detectedStack || [],
+      port:      backendConfig?.port || frontendConfig?.port,
+      createdAt,
+    });
+    log('success', `Registered in ~/.vbs/projects.json ✓`);
+
+    // Summary
     const summarySpinner = createSpinner('Generating summary.txt...');
     summarySpinner.start();
-
     try {
       const summary = await generateSummary({
         projectName,
         projectDir,
-        stack:       analysis.detectedStack,
-        port,
-        endpoints,
+        projectType,
+        stack:        analysis.detectedStack,
+        port:         backendConfig?.port || frontendConfig?.port,
+        backendPort:  backendConfig?.port,
+        frontendPort: frontendConfig?.port,
+        frontendFramework: frontendConfig?.framework,
+        endpoints:    codeResult.allEndpoints || [],
         testResults,
         aiNotes,
-        answers:     userAnswers,
+        answers:      userAnswers,
         serverIp,
-        version:     pkg.version,
+        version:      pkg.version,
+        nginxConfig:  nginxConfigPath,
       });
-
       await writeSummaryFiles(summary, projectDir);
-      spinnerSuccess(summarySpinner, `summary.txt saved → ${chalk.cyan(projectDir + '/summary.txt')} + current dir`);
+      spinnerSuccess(summarySpinner, `summary.txt → ${chalk.cyan(projectDir + '/summary.txt')}`);
     } catch (err) {
-      spinnerFail(summarySpinner, `Could not write summary: ${err.message}`);
+      spinnerFail(summarySpinner, `Summary write failed: ${err.message}`);
     }
 
-    // Final success banner
-    showSuccessBox(projectName, port, projectDir);
+    // ── Final success banner ──────────────────────────────────────────────────
+    showSuccessBox({
+      projectName,
+      port:          backendConfig?.port || frontendConfig?.port,
+      projectDir,
+      projectType,
+      backendPort:   backendConfig?.port,
+      frontendPort:  frontendConfig?.port,
+      serverIp,
+      backendPm2:    backendConfig?.pm2Name,
+      frontendPm2:   frontendConfig?.pm2Name,
+      nginxConfig:   nginxConfigPath,
+    });
 
   } catch (err) {
     console.error('\n' + chalk.red.bold(`  ${figures.cross} Fatal error: ${err.message}\n`));

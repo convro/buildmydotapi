@@ -1,30 +1,32 @@
 import { promises as fs } from 'fs';
-import { join, dirname } from 'path';
-import { showFileProgress } from '../ui/display.mjs';
+import { join, dirname }  from 'path';
+import { showFileWritten, showFileWrittenFinal } from '../ui/display.mjs';
 
 /**
  * Write all generated files to the project directory.
- * Shows a progress bar for each file.
+ * Shows a live progress bar and per-file name; prints a summary line at the end.
+ *
  * @param {string} projectDir  - Absolute path to project root
  * @param {Array}  files       - Array of { path, content } objects
  */
 export async function writeProjectFiles(projectDir, files) {
-  // Ensure the project root exists
   await fs.mkdir(projectDir, { recursive: true });
 
-  const total = files.length;
+  const total      = files.length;
+  let   totalLines = 0;
 
   for (let i = 0; i < total; i++) {
-    const file     = files[i];
-    const fullPath = join(projectDir, file.path);
-    const dir      = dirname(fullPath);
+    const file      = files[i];
+    const fullPath  = join(projectDir, file.path);
+    const dir       = dirname(fullPath);
+    const lineCount = file.content.split('\n').length;
+    totalLines     += lineCount;
 
-    showFileProgress(i + 1, total, file.path);
+    showFileWritten(i + 1, total, file.path, lineCount);
 
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(fullPath, file.content, 'utf8');
   }
 
-  // Newline after progress bar
-  process.stdout.write('\n');
+  showFileWrittenFinal(total, totalLines);
 }

@@ -1,6 +1,6 @@
 import { promises as fs } from 'fs';
-import { join } from 'path';
-import { shell } from '../system/executor.mjs';
+import { join }           from 'path';
+import { shell }          from '../system/executor.mjs';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -11,40 +11,34 @@ async function getServerIP() {
   return (res.stdout.trim() || 'YOUR_SERVER_IP').split('\n')[0].trim();
 }
 
-function padMethod(method) {
-  return method.padEnd(6);
-}
+function padMethod(m) { return m.padEnd(6); }
 
 function buildEndpointsSection(endpoints, serverIp, port) {
-  if (!endpoints || endpoints.length === 0) return '';
+  if (!endpoints?.length) return '';
 
-  const baseUrl = `http://${serverIp}:${port}`;
-  const pub     = endpoints.filter(e => !e.requiresAuth);
-  const prot    = endpoints.filter(e =>  e.requiresAuth);
+  const base = `http://${serverIp}:${port}`;
+  const pub  = endpoints.filter(e => !e.requiresAuth);
+  const prot = endpoints.filter(e =>  e.requiresAuth);
 
-  let out = `ENDPOINTS\n  Base URL: ${baseUrl}\n\n`;
+  let out = `ENDPOINTS\n  Base URL: ${base}\n\n`;
 
-  if (pub.length > 0) {
+  if (pub.length) {
     out += '  [PUBLIC]\n';
     for (const ep of pub) {
-      out += `  ${padMethod(ep.method)} ${baseUrl}${ep.path}\n`;
+      out += `  ${padMethod(ep.method)} ${base}${ep.path}\n`;
       out += `         → ${ep.description}\n`;
-      if (ep.exampleBody) {
-        out += `         Body: ${JSON.stringify(ep.exampleBody)}\n`;
-      }
+      if (ep.exampleBody) out += `         Body: ${JSON.stringify(ep.exampleBody)}\n`;
       out += '\n';
     }
   }
 
-  if (prot.length > 0) {
+  if (prot.length) {
     out += '  [PROTECTED — Bearer Token Required]\n';
     for (const ep of prot) {
-      out += `  ${padMethod(ep.method)} ${baseUrl}${ep.path}\n`;
+      out += `  ${padMethod(ep.method)} ${base}${ep.path}\n`;
       out += `         Headers: Authorization: Bearer {token}\n`;
       out += `         → ${ep.description}\n`;
-      if (ep.exampleBody) {
-        out += `         Body: ${JSON.stringify(ep.exampleBody)}\n`;
-      }
+      if (ep.exampleBody) out += `         Body: ${JSON.stringify(ep.exampleBody)}\n`;
       out += '\n';
     }
   }
@@ -53,7 +47,7 @@ function buildEndpointsSection(endpoints, serverIp, port) {
 }
 
 function buildCurlExamples(endpoints, serverIp, port) {
-  if (!endpoints || endpoints.length === 0) return 'CURL EXAMPLES\n  (no endpoints)\n';
+  if (!endpoints?.length) return 'CURL EXAMPLES\n  (no endpoints)\n';
 
   const base = `http://${serverIp}:${port}`;
   let out = 'CURL EXAMPLES\n';
@@ -80,17 +74,13 @@ function buildCurlExamples(endpoints, serverIp, port) {
 }
 
 function buildTestResults(testResults) {
-  if (!testResults || testResults.length === 0) {
-    return 'TEST RESULTS\n  No test results recorded.\n';
-  }
+  if (!testResults?.length) return 'TEST RESULTS\n  No test results recorded.\n';
 
-  const passed  = testResults.filter(r => r.passed).length;
-  const total   = testResults.length;
-  const icon    = passed === total ? '✔' : '⚠';
+  const passed = testResults.filter(r => r.passed).length;
+  const total  = testResults.length;
+  const icon   = passed === total ? '✔' : '⚠';
 
-  let out = `TEST RESULTS\n`;
-  out += `  Total:  ${total} endpoints tested\n`;
-  out += `  Passed: ${passed}/${total} ${icon}\n\n`;
+  let out = `TEST RESULTS\n  Total:  ${total}\n  Passed: ${passed}/${total} ${icon}\n\n`;
 
   for (const r of testResults) {
     const mark = r.passed ? '✔' : '✖';
@@ -100,58 +90,95 @@ function buildTestResults(testResults) {
   return out;
 }
 
-// ─── Main Generator ───────────────────────────────────────────────────────────
+// ─── Main generator ───────────────────────────────────────────────────────────
 
-/**
- * Generate the full summary.txt content.
- */
 export async function generateSummary({
   projectName,
   projectDir,
+  projectType   = 'api',
   stack,
   port,
+  backendPort,
+  frontendPort,
+  frontendFramework,
   endpoints,
   testResults,
   aiNotes,
   answers,
-  serverIp: providedIp = null,
-  version = '1.9.0',
+  serverIp:    providedIp = null,
+  version      = '2.0.0',
+  nginxConfig  = null,
 }) {
-  // Use explicitly set SERVER_IPV4 env var, then caller-provided IP, then auto-detect
   const serverIp = process.env.SERVER_IPV4?.trim() || providedIp || await getServerIP();
-  const now      = new Date();
-  const dateStr  = now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  const line     = '═'.repeat(51);
+  const dateStr  = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const line     = '═'.repeat(55);
 
-  const endpointsSection = buildEndpointsSection(endpoints, serverIp, port);
-  const curlSection      = buildCurlExamples(endpoints, serverIp, port);
+  const apiPort  = backendPort || port;
+
+  const endpointsSection = projectType !== 'frontend'
+    ? buildEndpointsSection(endpoints, serverIp, apiPort)
+    : '';
+  const curlSection      = projectType !== 'frontend'
+    ? buildCurlExamples(endpoints, serverIp, apiPort)
+    : '';
   const testSection      = buildTestResults(testResults);
 
-  // Collect env var names (heuristic)
-  const envVarNames = ['PORT', 'NODE_ENV', 'JWT_SECRET'];
-  if (answers.database_name || answers.db_name) {
-    envVarNames.push('DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD');
+  let serverSection = '';
+
+  if (projectType === 'api') {
+    serverSection = `SERVER
+  Port:       ${port}
+  Process:    pm2 (name: ${projectName})
+  URL:        http://${serverIp}:${port}
+
+  pm2 start:    pm2 start ${projectName}
+  pm2 stop:     pm2 stop ${projectName}
+  pm2 restart:  pm2 restart ${projectName}
+  pm2 logs:     pm2 logs ${projectName}`;
   }
 
+  if (projectType === 'frontend') {
+    serverSection = `SERVER
+  Type:       Frontend (${frontendFramework || 'react'})
+  ${nginxConfig ? `nginx:      ${nginxConfig}\n  URL:        http://${serverIp}` : `Port:       ${port}`}
+
+  Build:      npm run build
+  ${frontendFramework === 'nextjs' ? `pm2 start:  pm2 start ${projectName}-front\n  pm2 logs:   pm2 logs ${projectName}-front` : 'nginx serves dist/ folder'}`;
+  }
+
+  if (projectType === 'fullstack') {
+    serverSection = `SERVER
+  Type:       Full-Stack (Express + ${frontendFramework || 'react'})
+  Backend:    port ${backendPort}  ·  pm2: ${projectName}-api
+  Frontend:   ${nginxConfig ? 'nginx (static/proxy)' : `port ${frontendPort}  ·  pm2: ${projectName}-front`}
+  ${nginxConfig ? `nginx:      ${nginxConfig}\n  URL:        http://${serverIp}  (/api → :${backendPort}, / → frontend)` : `Backend URL:  http://${serverIp}:${backendPort}`}
+
+  pm2 restart:  pm2 restart ${projectName}-api
+  pm2 logs:     pm2 logs ${projectName}-api
+  ${frontendFramework === 'nextjs' ? `pm2 restart frontend: pm2 restart ${projectName}-front` : ''}
+  Rebuild frontend:     cd ${projectDir}/frontend && npm run build`;
+  }
+
+  // Env vars heuristic
+  const envVarNames = ['PORT', 'NODE_ENV'];
+  if (answers?.database_name || answers?.db_name) {
+    envVarNames.push('DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD');
+  }
+  if (answers?.jwt_auto_generate !== undefined) envVarNames.push('JWT_SECRET');
+
   const summary = `${line}
-  VBS — Virtual Based Scenography | Deployment Summary
+  VBS — Virtual Based Scenography  |  Deployment Summary
   Generated: ${dateStr}
+  Version:   v${version}
 ${line}
 
 PROJECT
   Name:       ${projectName}
+  Type:       ${projectType}
   Directory:  ${projectDir}
-  Stack:      ${stack.join(', ')}
+  Stack:      ${(stack || []).join(', ')}
 
-SERVER
-  Port:       ${port}
-  Process:    pm2 (name: ${projectName})
-  Status:     ✔ ONLINE
-
-  Start:      pm2 start ${projectName}
-  Stop:       pm2 stop ${projectName}
-  Restart:    pm2 restart ${projectName}
-  Logs:       pm2 logs ${projectName}
+${serverSection}
 
 ${endpointsSection}${curlSection}
 
@@ -161,9 +188,12 @@ AI NOTES
 
 ENVIRONMENT
   ${projectDir}/.env  ← DO NOT commit this file!
+  Variables: ${envVarNames.join(', ')}
 
-  Variables set:
-  - ${envVarNames.join('\n  - ')}
+CONFIG
+  ${projectDir}/config.vbs  ← Project config (safe to commit)
+  Load project: vbs open ${projectName}
+  Modify:       vbs modify ${projectName} prompt='...'
 
 ${line}
   Created with VBS — Virtual Based Scenography v${version}
@@ -173,9 +203,6 @@ ${line}
   return summary;
 }
 
-/**
- * Write summary.txt to the project directory AND the current working directory.
- */
 export async function writeSummaryFiles(summary, projectDir) {
   await fs.writeFile(join(projectDir, 'summary.txt'), summary, 'utf8');
   await fs.writeFile(join(process.cwd(), 'summary.txt'), summary, 'utf8');

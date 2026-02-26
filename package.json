@@ -1,7 +1,7 @@
 {
   "name": "vbs",
-  "version": "1.9.0",
-  "description": "VBS — Virtual Based Scenography. AI-powered REST API deployment CLI for Ubuntu VPS",
+  "version": "2.0.0",
+  "description": "VBS — Virtual Based Scenography. AI-powered full-stack deployment CLI: REST API, Frontend (React/Next.js), Full-Stack",
   "type": "module",
   "bin": {
     "vbs": "./bin/vbs.mjs"
@@ -16,11 +16,16 @@
   "keywords": [
     "cli",
     "api",
+    "frontend",
+    "fullstack",
+    "react",
+    "nextjs",
     "vps",
     "ubuntu",
     "ai",
     "rest",
     "deepseek",
+    "nginx",
     "deployment",
     "vbs",
     "virtual-based-scenography"
