@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'url';
-import { dirname, join }  from 'path';
+import { dirname, join, basename } from 'path';
 import { promises as fs } from 'fs';
 import chalk   from 'chalk';
 import figures from 'figures';
@@ -10,14 +10,18 @@ import {
   showAnalysis, showAnswersSummary, showTestResults,
   showSuccessBox, showErrorBox,
 } from './ui/display.mjs';
-import { createSpinner, spinnerSuccess, spinnerFail, spinnerWarn } from './ui/spinner.mjs';
-import { askAllQuestions, askProjectDirectory } from './ui/prompt-ui.mjs';
+import {
+  createSpinner, createAiSpinner, spinnerSuccess, spinnerFail, spinnerWarn,
+  startElapsedTimer,
+} from './ui/spinner.mjs';
+import { askAllQuestions, askProjectDirectory, confirm } from './ui/prompt-ui.mjs';
 
 // ── AI ────────────────────────────────────────────────────────────────────────
 import { analyzeRequest }                     from './ai/analyzer.mjs';
 import { generateQuestions }                  from './ai/questioner.mjs';
 import { generateCode }                       from './ai/codegen.mjs';
 import { analyzeTestResults, diagnoseFailure } from './ai/tester.mjs';
+import { fixBuildErrors }                     from './ai/fixer.mjs';
 
 // ── System ────────────────────────────────────────────────────────────────────
 import { exec }                                  from './system/executor.mjs';
@@ -84,7 +88,7 @@ async function runNpmInstall(dir, label = '') {
   const npmSpinner = createSpinner(`Running npm install ${lbl}...`);
   npmSpinner.start();
 
-  const res = await exec('npm', ['install', '--prefer-offline'], { cwd: dir });
+  const res = await exec('npm', ['install', '--legacy-peer-deps'], { cwd: dir });
   if (res.success) {
     spinnerSuccess(npmSpinner, `${lbl}dependencies installed ✓`);
     return true;
@@ -138,12 +142,152 @@ async function launchWithPm2(startCommand, pm2Name, projectDir) {
     console.log(chalk.gray('  ' + logs.split('\n').slice(-15).join('\n  ')));
     console.log('');
 
-    const diagSpinner = createSpinner('AI diagnosing startup issue...', 'AI thinking');
+    const diagSpinner = createAiSpinner('AI diagnosing startup issue...');
     diagSpinner.start();
     const diagnosis = await diagnoseFailure(logs, pm2Name);
     spinnerSuccess(diagSpinner, 'Diagnosis ready');
     console.log('\n' + chalk.bold.yellow('  AI Diagnosis:'));
     console.log(chalk.gray('  ' + diagnosis.split('\n').join('\n  ')) + '\n');
+  }
+
+  return false;
+}
+
+// ─── Build verification with AI auto-fix ──────────────────────────────────────
+
+const SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.ts', '.tsx', '.jsx', '.json', '.css', '.html', '.vue']);
+const SKIP_DIRS         = new Set(['node_modules', '.next', 'dist', 'build', '.git', 'coverage', '.cache', 'out']);
+
+/**
+ * Recursively gather source files from a directory for AI context.
+ * Returns { path (relative to dir), content } objects, limited to maxTotalChars.
+ */
+async function gatherSourceFiles(dir, maxTotalChars = 16000) {
+  const files = [];
+
+  async function walk(currentDir, relBase) {
+    let entries;
+    try { entries = await fs.readdir(currentDir, { withFileTypes: true }); }
+    catch { return; }
+
+    for (const entry of entries) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+
+      const fullPath = join(currentDir, entry.name);
+      const relPath  = relBase ? `${relBase}/${entry.name}` : entry.name;
+      const ext      = '.' + entry.name.split('.').pop();
+
+      if (entry.isDirectory()) {
+        await walk(fullPath, relPath);
+      } else if (SOURCE_EXTENSIONS.has(ext)) {
+        try {
+          const content = await fs.readFile(fullPath, 'utf8');
+          files.push({ path: relPath, content });
+        } catch { /* skip unreadable */ }
+      }
+    }
+  }
+
+  await walk(dir, '');
+
+  // Sort: src/ files first, package.json configs last
+  files.sort((a, b) => {
+    const score = (f) =>
+      f.path.startsWith('src/')  ? 0 :
+      f.path === 'package.json'  ? 3 :
+      f.path.endsWith('.json')   ? 2 : 1;
+    return score(a) - score(b);
+  });
+
+  const selected = [];
+  let total = 0;
+  for (const f of files) {
+    if (total + f.content.length > maxTotalChars) break;
+    selected.push(f);
+    total += f.content.length;
+  }
+  return selected;
+}
+
+/**
+ * Run npm run build and — on failure — ask AI to generate fix patches.
+ * Loops up to maxAttempts. Returns true if build eventually succeeds.
+ */
+async function runBuildWithAutoFix(buildDir, projectName, maxAttempts = 5) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const attemptSuffix = attempt > 1 ? chalk.gray(` (attempt ${attempt}/${maxAttempts})`) : '';
+    const buildSpinner  = createSpinner(`Building for production...${attemptSuffix}`, 'npm run build');
+    buildSpinner.start();
+
+    const buildResult = await exec('npm', ['run', 'build'], { cwd: buildDir });
+
+    if (buildResult.success) {
+      spinnerSuccess(buildSpinner, 'Build successful ✓');
+      return true;
+    }
+
+    const errorOutput = [buildResult.stdout, buildResult.stderr].filter(Boolean).join('\n').trim();
+    spinnerFail(buildSpinner, `Build failed (attempt ${attempt}/${maxAttempts})`);
+
+    // Show last lines of error
+    const preview = errorOutput.split('\n').filter(Boolean).slice(-12).join('\n');
+    console.log(chalk.red('\n  ' + preview.split('\n').join('\n  ') + '\n'));
+
+    if (attempt >= maxAttempts) {
+      log('warning', `Build still failing after ${maxAttempts} AI fix attempts. Check manually.`);
+      return false;
+    }
+
+    // Gather source files for AI context
+    const sourceFiles = await gatherSourceFiles(buildDir);
+    log('step', `Sending ${sourceFiles.length} source files to AI for diagnosis...`);
+
+    const fixSpinner = createAiSpinner('AI diagnosing build errors...');
+    fixSpinner.start();
+
+    let fixedTokens = 0;
+    const stopFixTimer = startElapsedTimer(fixSpinner, (t) =>
+      chalk.white('AI fixing build errors...') +
+      chalk.gray(`  [${fixedTokens.toLocaleString()} tokens — ${t}]`)
+    );
+
+    let patches;
+    try {
+      patches = await fixBuildErrors(
+        errorOutput,
+        sourceFiles,
+        projectName,
+        (n) => { fixedTokens = n; }
+      );
+      stopFixTimer();
+      spinnerSuccess(fixSpinner, `AI generated ${patches.length} fix(es) — applying...`);
+    } catch (err) {
+      stopFixTimer();
+      spinnerFail(fixSpinner, `AI fixer failed: ${err.message}`);
+      return false;
+    }
+
+    if (!patches.length) {
+      log('warning', 'AI returned no patches — cannot auto-fix. Check errors above manually.');
+      return false;
+    }
+
+    // Apply patches
+    for (const patch of patches) {
+      // Normalize path — AI might prefix with "frontend/" or "backend/"
+      const relPath  = patch.path.replace(/^frontend\//, '').replace(/^backend\//, '');
+      const filePath = join(buildDir, relPath);
+      try {
+        await fs.mkdir(dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, patch.content, 'utf8');
+        log('success', `Patched: ${relPath}`);
+      } catch (err) {
+        log('warning', `Could not write patch ${relPath}: ${err.message}`);
+      }
+    }
+
+    console.log('');
+    log('step', 'Retrying build after AI fixes...');
   }
 
   return false;
@@ -187,7 +331,7 @@ export async function run(userPrompt, options = {}) {
 
     const typeLabel =
       projectType === 'fullstack' ? chalk.green('fullstack (API + Frontend + nginx)') :
-      projectType === 'frontend'  ? chalk.magenta('frontend (React/Next.js)') :
+      projectType === 'frontend'  ? chalk.magenta('frontend (React/Next.js/Static)') :
       chalk.cyan('api (REST API)');
 
     log('info', `Build type: ${typeLabel}`);
@@ -216,7 +360,7 @@ export async function run(userPrompt, options = {}) {
     // ══════════════════════════════════════════════════════════════════════════
     showPhaseHeader(1, 'ANALYSIS');
 
-    const analysisSpinner = createSpinner('AI analyzing your request...', 'AI thinking');
+    const analysisSpinner = createAiSpinner('AI analyzing your request...');
     analysisSpinner.start();
 
     let analysis;
@@ -235,7 +379,7 @@ export async function run(userPrompt, options = {}) {
     // ══════════════════════════════════════════════════════════════════════════
     showPhaseHeader(2, 'CONFIGURATION');
 
-    const questionSpinner = createSpinner('Generating configuration questions...', 'AI thinking');
+    const questionSpinner = createAiSpinner('Generating configuration questions...');
     questionSpinner.start();
 
     let questions;
@@ -265,8 +409,8 @@ export async function run(userPrompt, options = {}) {
       userAnswers.frontendPort = String(userAnswers.frontend_port || '3000');
       userAnswers.port = userAnswers.backendPort;
     } else {
-      // frontend
-      userAnswers.port = String(userAnswers.port || userAnswers.frontend_port || '3000');
+      // frontend (static or SPA)
+      userAnswers.port = String(userAnswers.port || userAnswers.frontend_port || '80');
     }
 
     showAnswersSummary(questions, userAnswers);
@@ -279,8 +423,14 @@ export async function run(userPrompt, options = {}) {
     await checkNode();
     await checkNpm();
 
-    // pm2 needed for api/fullstack; also for Next.js frontend
-    const needsPm2 = projectType !== 'frontend' || analysis.frontendFramework === 'nextjs';
+    // Detect static HTML project (no npm needed for the project itself)
+    const isStaticSite = !!(analysis.isStatic && projectType === 'frontend');
+
+    // pm2 needed for api/fullstack, and for Next.js frontend (not for static or React SPA served by nginx)
+    const needsPm2 =
+      projectType === 'api' ||
+      projectType === 'fullstack' ||
+      (projectType === 'frontend' && !isStaticSite && analysis.frontendFramework === 'nextjs');
     if (needsPm2) await checkPm2();
 
     // nginx for frontend/fullstack
@@ -332,24 +482,39 @@ export async function run(userPrompt, options = {}) {
     // ══════════════════════════════════════════════════════════════════════════
     showPhaseHeader(4, 'CODE GENERATION');
 
-    const codeSpinner = createSpinner(
-      projectType === 'fullstack' ? 'Generating full-stack project (backend + frontend)...' :
-      projectType === 'frontend'  ? 'Generating frontend app...' :
-      'Generating REST API...',
-      'AI thinking'
-    );
+    const genLabel =
+      projectType === 'fullstack'               ? 'Generating backend + frontend in parallel...' :
+      isStaticSite                              ? 'Generating static HTML/CSS/JS site...' :
+      projectType === 'frontend'                ? 'Generating frontend app...' :
+      'Generating REST API...';
+
+    const codeSpinner = createAiSpinner(genLabel);
     codeSpinner.start();
+
+    // Track streaming token progress per phase
+    const tokenCounts = {};
+    const onProgress  = (phase, n) => { tokenCounts[phase] = n; };
+
+    const stopCodeTimer = startElapsedTimer(codeSpinner, (t) => {
+      const parts = Object.entries(tokenCounts)
+        .map(([phase, n]) => `${phase}: ${n.toLocaleString()}`)
+        .join(' | ');
+      const detail = parts ? `${parts} tokens — ${t}` : t;
+      return chalk.white(genLabel) + chalk.gray(`  [${detail}]`);
+    });
 
     let codeResult;
     try {
-      codeResult = await generateCode(analysis, userAnswers, userPrompt, serverIp, projectType);
+      codeResult = await generateCode(analysis, userAnswers, userPrompt, serverIp, projectType, onProgress);
+      stopCodeTimer();
       spinnerSuccess(codeSpinner, `Generated ${codeResult.files.length} files`);
     } catch (err) {
+      stopCodeTimer();
       spinnerFail(codeSpinner, `Code generation failed: ${err.message}`);
       throw err;
     }
 
-    // Write files
+    // Write files to disk
     log('step', 'Writing project files...');
     console.log('');
     await writeProjectFiles(projectDir, codeResult.files);
@@ -363,18 +528,13 @@ export async function run(userPrompt, options = {}) {
       await runNpmInstall(projectDir);
     }
 
-    if (projectType === 'frontend') {
+    if (projectType === 'frontend' && !isStaticSite) {
       await runNpmInstall(projectDir, 'frontend');
 
-      // Build step
-      const buildSpinner = createSpinner('Building frontend for production...', 'npm run build');
-      buildSpinner.start();
-      const buildResult = await exec('npm', ['run', 'build'], { cwd: projectDir });
-      if (buildResult.success) {
-        spinnerSuccess(buildSpinner, 'Frontend built successfully ✓');
-      } else {
-        spinnerFail(buildSpinner, `Build had errors:\n${buildResult.stderr.slice(0, 200)}`);
-        log('warning', 'Continuing despite build errors — check manually');
+      // Build with AI-powered auto-fix loop (up to 5 attempts)
+      const buildOk = await runBuildWithAutoFix(projectDir, projectName);
+      if (!buildOk) {
+        log('warning', 'Build failed after all attempts — project is on disk; fix manually with npm run build');
       }
     }
 
@@ -385,14 +545,10 @@ export async function run(userPrompt, options = {}) {
       await runNpmInstall(backendDir, 'backend');
       await runNpmInstall(frontendDir, 'frontend');
 
-      // Build frontend
-      const buildSpinner = createSpinner('Building frontend for production...', 'npm run build');
-      buildSpinner.start();
-      const buildResult = await exec('npm', ['run', 'build'], { cwd: frontendDir });
-      if (buildResult.success) {
-        spinnerSuccess(buildSpinner, 'Frontend built ✓');
-      } else {
-        spinnerWarn(buildSpinner, 'Frontend build had errors — check manually');
+      // Build frontend with AI-powered auto-fix loop
+      const buildOk = await runBuildWithAutoFix(frontendDir, `${projectName} frontend`);
+      if (!buildOk) {
+        log('warning', `Frontend build failed — check manually in ${frontendDir}`);
       }
     }
 
@@ -413,36 +569,45 @@ export async function run(userPrompt, options = {}) {
     }
 
     if (projectType === 'frontend') {
-      const framework   = codeResult.frontendFramework || userAnswers.frontend_framework || 'react';
-      const isNextJs    = framework === 'nextjs' || framework === 'next';
-
-      if (isNextJs) {
-        // Next.js: pm2 runs next start
-        const pm2Front = codeResult.pm2Name || `${projectName}-front`;
-        frontendOnline = await launchWithPm2(
-          codeResult.startCommand || 'npm start',
-          pm2Front,
-          projectDir
-        );
-        // nginx proxies to Next.js
-        if (isRoot) {
-          nginxConfigPath = await configureApiProxy({
-            name:        projectName,
-            backendPort: parseInt(userAnswers.port || '3000'),
-          });
-        }
-      } else {
-        // React SPA: nginx serves static files from dist/
-        const buildDir = join(projectDir, 'dist');
+      if (isStaticSite) {
+        // Pure static HTML — nginx serves files directly, no Node.js process
         if (isRoot) {
           nginxConfigPath = await configureStaticFrontend({
             name:     projectName,
-            buildDir,
+            buildDir: projectDir,
           });
         } else {
-          log('warning', 'Not root — skipping nginx setup. Serve dist/ manually.');
+          log('warning', 'Not root — skipping nginx setup. Serve the HTML files manually.');
         }
         frontendOnline = true;
+        log('success', 'Static site ready — served by nginx ✓');
+      } else {
+        const framework = codeResult.frontendFramework || userAnswers.frontend_framework || 'react';
+        const isNextJs  = framework === 'nextjs' || framework === 'next';
+
+        if (isNextJs) {
+          const pm2Front = codeResult.pm2Name || `${projectName}-front`;
+          frontendOnline = await launchWithPm2(
+            codeResult.startCommand || 'npm start',
+            pm2Front,
+            projectDir
+          );
+          if (isRoot) {
+            nginxConfigPath = await configureApiProxy({
+              name:        projectName,
+              backendPort: parseInt(userAnswers.port || '3000'),
+            });
+          }
+        } else {
+          // React SPA — nginx serves static dist/
+          const buildDir = join(projectDir, 'dist');
+          if (isRoot) {
+            nginxConfigPath = await configureStaticFrontend({ name: projectName, buildDir });
+          } else {
+            log('warning', 'Not root — skipping nginx. Serve dist/ manually.');
+          }
+          frontendOnline = true;
+        }
       }
     }
 
@@ -458,7 +623,7 @@ export async function run(userPrompt, options = {}) {
       const backCmd  = codeResult.backendStartCommand  || 'node src/index.js';
       const frontCmd = codeResult.frontendStartCommand || 'npm start';
 
-      backendOnline  = await launchWithPm2(backCmd, backendPm2, backendDir);
+      backendOnline = await launchWithPm2(backCmd, backendPm2, backendDir);
 
       const framework = codeResult.frontendFramework || userAnswers.frontend_framework || 'react';
       const isNextJs  = framework === 'nextjs' || framework === 'next';
@@ -474,7 +639,7 @@ export async function run(userPrompt, options = {}) {
           });
         }
       } else {
-        // React SPA — built static files
+        // React SPA — built static files served by nginx
         const buildDir = join(frontendDir, 'dist');
         if (isRoot) {
           nginxConfigPath = await configureFullstack({
@@ -515,7 +680,7 @@ export async function run(userPrompt, options = {}) {
       }
 
       if (testResults.length > 0) {
-        const noteSpinner = createSpinner('AI analyzing test results...', 'AI thinking');
+        const noteSpinner = createAiSpinner('AI analyzing test results...');
         noteSpinner.start();
         aiNotes = await analyzeTestResults(testResults, projectName, serverIp, port);
         spinnerSuccess(noteSpinner, 'Analysis complete');
@@ -532,7 +697,6 @@ export async function run(userPrompt, options = {}) {
 
     const createdAt = new Date().toISOString();
 
-    // Determine backend/frontend config objects for config.vbs
     let backendConfig  = null;
     let frontendConfig = null;
 
@@ -547,10 +711,10 @@ export async function run(userPrompt, options = {}) {
 
     if (projectType === 'frontend') {
       frontendConfig = {
-        port:       parseInt(userAnswers.port),
-        framework:  codeResult.frontendFramework || userAnswers.frontend_framework || 'react',
-        pm2Name:    codeResult.pm2Name || `${projectName}-front`,
-        buildCommand: 'npm run build',
+        port:         parseInt(userAnswers.port),
+        framework:    isStaticSite ? 'static' : (codeResult.frontendFramework || userAnswers.frontend_framework || 'react'),
+        pm2Name:      isStaticSite ? null : (codeResult.pm2Name || `${projectName}-front`),
+        buildCommand: isStaticSite ? null : 'npm run build',
       };
     }
 
@@ -569,11 +733,11 @@ export async function run(userPrompt, options = {}) {
       };
     }
 
-    // config.vbs
     const configVbs = {
       vbs:       pkg.version,
       name:      projectName,
       type:      projectType,
+      isStatic:  isStaticSite || false,
       createdAt,
       updatedAt: createdAt,
       prompt:    userPrompt.trim(),
@@ -584,9 +748,8 @@ export async function run(userPrompt, options = {}) {
         ip:          serverIp || null,
         nginxConfig: nginxConfigPath || null,
       },
-      answers:   {
+      answers: {
         ...userAnswers,
-        // strip passwords from stored answers for security
         database_password: userAnswers.database_password ? '[set]' : undefined,
       },
       endpoints: codeResult.allEndpoints || [],
@@ -602,7 +765,6 @@ export async function run(userPrompt, options = {}) {
       spinnerFail(configSpinner, `config.vbs write failed: ${err.message}`);
     }
 
-    // Register in global registry
     await registerProject({
       name:      projectName,
       dir:       projectDir,
@@ -613,7 +775,6 @@ export async function run(userPrompt, options = {}) {
     });
     log('success', `Registered in ~/.vbs/projects.json ✓`);
 
-    // Summary
     const summarySpinner = createSpinner('Generating summary.txt...');
     summarySpinner.start();
     try {
@@ -621,18 +782,18 @@ export async function run(userPrompt, options = {}) {
         projectName,
         projectDir,
         projectType,
-        stack:        analysis.detectedStack,
-        port:         backendConfig?.port || frontendConfig?.port,
-        backendPort:  backendConfig?.port,
-        frontendPort: frontendConfig?.port,
+        stack:             analysis.detectedStack,
+        port:              backendConfig?.port || frontendConfig?.port,
+        backendPort:       backendConfig?.port,
+        frontendPort:      frontendConfig?.port,
         frontendFramework: frontendConfig?.framework,
-        endpoints:    codeResult.allEndpoints || [],
+        endpoints:         codeResult.allEndpoints || [],
         testResults,
         aiNotes,
-        answers:      userAnswers,
+        answers:           userAnswers,
         serverIp,
-        version:      pkg.version,
-        nginxConfig:  nginxConfigPath,
+        version:           pkg.version,
+        nginxConfig:       nginxConfigPath,
       });
       await writeSummaryFiles(summary, projectDir);
       spinnerSuccess(summarySpinner, `summary.txt → ${chalk.cyan(projectDir + '/summary.txt')}`);
@@ -640,7 +801,6 @@ export async function run(userPrompt, options = {}) {
       spinnerFail(summarySpinner, `Summary write failed: ${err.message}`);
     }
 
-    // ── Final success banner ──────────────────────────────────────────────────
     showSuccessBox({
       projectName,
       port:          backendConfig?.port || frontendConfig?.port,
