@@ -49,6 +49,7 @@ const STATIC_QUESTIONS = `This is a PLAIN STATIC HTML/CSS/JS project. Generate 4
 ALWAYS include:
 - project_name (input, default: suggested name)
 - site_title (input, default: humanized project name, used as <title> and main heading)
+- page_language (list, choices: ["English", "Polish", "German", "French", "Spanish", "Italian", "Portuguese", "Other"], default: "English") — the language all VISIBLE TEXT on the site will be written in
 
 Include based on the specific request:
 - description (input, default: "") — meta description / intro text for the site
@@ -63,6 +64,7 @@ const FRONTEND_QUESTIONS = `Generate 6-10 focused questions. ALWAYS include:
 - project_name (input, default: suggested name)
 - frontend_framework (list: choices match what analysis detected — if analysis.frontendFramework is "react" offer "React (Vite SPA)" first, if "nextjs" offer "Next.js (SSR/SSG)" first)
 - port (input, default: "3000", validate: "port_number")
+- page_language (list, choices: ["English", "Polish", "German", "French", "Spanish", "Italian", "Portuguese", "Other"], default: "English") — the language all VISIBLE TEXT in the app will be written in
 
 Include based on what this project actually needs:
 - app_title (input) — if the app has a title/brand visible to users
@@ -80,6 +82,7 @@ const FULLSTACK_QUESTIONS = `Generate 8-14 focused questions. ALWAYS include:
 - frontend_framework (list: "React (Vite SPA)" | "Next.js (SSR/SSG)")
 - backend_port (input, default: "3001", validate: "port_number")
 - frontend_port (input, default: "3000", validate: "port_number")
+- page_language (list, choices: ["English", "Polish", "German", "French", "Spanish", "Italian", "Portuguese", "Other"], default: "English") — the language all VISIBLE TEXT in the app will be written in
 
 Include based on what the project actually uses:
 - typescript (confirm, default: true) — for frontend

@@ -4,10 +4,11 @@ import { sendMessage, extractJSON, MODELS } from './client.mjs';
 
 const SHARED_RULES = `
 CRITICAL COMMENT RULE — MUST FOLLOW WITHOUT EXCEPTION:
-- ALL comments in ALL generated code files MUST be written in Korean (한국어)
-- Applies to every comment: inline, block, JSDoc, section headers — everything
+- ALL source-code COMMENTS (// ..., /* ... */, /** JSDoc */, # hash comments) MUST be written in Korean (한국어)
+- This rule applies ONLY to code comments — it does NOT affect visible page content, HTML text, labels, headings, or any user-facing output
 - Examples: // 사용자 인증 미들웨어  |  /* 데이터베이스 연결 풀 */  |  // 포트 번호 설정
-- NEVER write comments in English or any other language — Korean only`;
+- NEVER write code comments in English or any other language — Korean only
+- PAGE LANGUAGE is a separate setting provided in the configuration — ALL user-visible text on the site/app must match that language`;
 
 // ── Model selection ────────────────────────────────────────────────────────────
 
@@ -312,6 +313,7 @@ export async function generateCode(
 
   // ── Static HTML ────────────────────────────────────────────────────────────
   if (projectType === 'frontend' && analysis.isStatic) {
+    const pageLanguage = answers.page_language || 'English';
     const userMessage = `Generate a complete static HTML/CSS/JS website.
 
 Original request: ${originalPrompt}
@@ -321,6 +323,7 @@ Configuration:
 - Description: ${answers.description || ''}
 - Color scheme: ${answers.color_scheme || 'Light & Clean'}
 - Contact form: ${answers.include_contact_form ? 'yes' : 'no'}
+- Page language: ${pageLanguage} — ALL visible text (headings, paragraphs, labels, buttons, nav, footer) MUST be written in ${pageLanguage}. Set <html lang="..."> to the correct ISO code.
 
 Project name: ${answers.projectName || analysis.suggestedProjectName}${serverContext}
 
@@ -375,10 +378,11 @@ ${JSON.stringify(answers, null, 2)}
 Project name: ${answers.projectName || analysis.suggestedProjectName}${serverContext}
 
 Generate all necessary files for a complete, immediately deployable REST API.
-Remember: ALL code comments MUST be in Korean (한국어).`;
+Remember: ALL source-code comments MUST be in Korean (한국어). This does NOT affect API response text or error messages.`;
 }
 
 function buildFrontendMessage(analysis, answers, originalPrompt, serverContext, frontendLabel, frontendFramework) {
+  const pageLanguage = answers.page_language || 'English';
   return `Generate a complete frontend app using ${frontendLabel}.
 
 Original request: ${originalPrompt}
@@ -388,6 +392,7 @@ Complexity: ${analysis.complexity}
 Framework: ${frontendFramework}
 TypeScript: ${answers.typescript === true || answers.typescript === 'true' ? 'yes' : 'no'}
 Styling: ${answers.styling || 'Tailwind CSS'}
+Page language: ${pageLanguage} — ALL visible text (headings, labels, buttons, nav, content) MUST be written in ${pageLanguage}. Set html lang attribute to the correct ISO code.
 
 User configuration:
 ${JSON.stringify(answers, null, 2)}
@@ -395,7 +400,7 @@ ${JSON.stringify(answers, null, 2)}
 Project name: ${answers.projectName || analysis.suggestedProjectName}${serverContext}
 
 Generate all necessary files for a complete, immediately deployable frontend app.
-Remember: ALL code comments MUST be in Korean (한국어).`;
+Remember: ALL source-code comments MUST be in Korean (한국어). This does NOT affect visible UI text — that must be in ${pageLanguage}.`;
 }
 
 /**
@@ -408,6 +413,8 @@ async function generateFullstackParallel(analysis, answers, originalPrompt, serv
   const frontendPort = answers.frontendPort || answers.frontend_port || '3000';
   const projectName  = answers.projectName  || analysis.suggestedProjectName;
 
+  const pageLanguage = answers.page_language || 'English';
+
   const sharedContext = `
 Project: ${projectName}
 Original request: ${originalPrompt}
@@ -415,6 +422,7 @@ Detected stack: ${analysis.detectedStack.join(', ')}
 Complexity: ${analysis.complexity}
 TypeScript: ${answers.typescript === true || answers.typescript === 'true' ? 'yes' : 'no'}
 Styling: ${answers.styling || 'Tailwind CSS'}
+Page language: ${pageLanguage}
 User configuration:
 ${JSON.stringify(answers, null, 2)}${serverContext}`;
 
@@ -424,7 +432,7 @@ ${sharedContext}
 Backend port: ${backendPort}
 Frontend will be served at / (nginx) and make calls to /api/* (proxied to this backend).
 ALL file paths must start with "backend/".
-Remember: ALL code comments MUST be in Korean (한국어).`;
+Remember: ALL source-code comments MUST be in Korean (한국어). This does NOT affect API response text.`;
 
   const frontendMessage = `Generate the FRONTEND part of a full-stack ${frontendLabel} + Express.js app.
 ${sharedContext}
@@ -433,7 +441,8 @@ Frontend framework: ${frontendLabel} (${frontendFramework})
 Frontend port: ${frontendPort}
 Backend API is available at /api/* via nginx proxy (do NOT hardcode backend port).
 ALL file paths must start with "frontend/".
-Remember: ALL code comments MUST be in Korean (한국어).`;
+Page language: ${pageLanguage} — ALL visible text in the UI (headings, labels, buttons, nav, content) MUST be written in ${pageLanguage}. Set html lang to the correct ISO code.
+Remember: ALL source-code comments MUST be in Korean (한국어). This does NOT affect visible UI text — that must be in ${pageLanguage}.`;
 
   // Run both in parallel — biggest time saving for fullstack projects
   const onBackToken  = onProgress ? (n) => onProgress('backend',  n) : null;

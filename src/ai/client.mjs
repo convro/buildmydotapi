@@ -223,24 +223,43 @@ function sanitizeControlChars(str) {
 }
 
 /**
+ * Strip trailing commas before } or ] — invalid JSON produced by some models.
+ * e.g.  { "a": 1, }  →  { "a": 1 }
+ * Only operates outside of string literals to avoid corrupting content.
+ */
+function removeTrailingCommas(str) {
+  // Two-pass regex is safe here: JSON structural chars are outside strings
+  // after sanitizeControlChars has already run.
+  return str.replace(/,(\s*[}\]])/g, '$1');
+}
+
+/**
  * Extract and parse JSON from an AI response.
  * Strips markdown fences, finds the first JSON structure,
- * sanitizes raw control characters, and attempts repair on truncated responses.
+ * sanitizes raw control characters, removes trailing commas,
+ * and attempts repair on truncated responses.
  *
  * @param {string} text
  * @throws {Error} if JSON cannot be parsed even after repair
  */
 export function extractJSON(text) {
-  let cleaned = text
+  // Strip UTF-8 BOM if present
+  let cleaned = text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
+
+  // Strip markdown code fences (```json ... ```)
+  cleaned = cleaned
     .replace(/^```(?:json)?\s*/m, '')
     .replace(/\s*```\s*$/m, '')
     .trim();
 
+  // Find where the JSON structure starts (skip any prose before it)
   const jsonStart = cleaned.search(/[{[]/);
   if (jsonStart > 0) cleaned = cleaned.slice(jsonStart);
 
   // Sanitize raw control characters inside string literals before parsing
   cleaned = sanitizeControlChars(cleaned);
+  // Remove trailing commas before } or ] (common AI mistake)
+  cleaned = removeTrailingCommas(cleaned);
 
   try {
     return JSON.parse(cleaned);
