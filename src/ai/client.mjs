@@ -193,9 +193,39 @@ function repairTruncatedJSON(str) {
 }
 
 /**
+ * Escape unescaped control characters (0x00–0x1f) found inside JSON string
+ * literals. AI models sometimes emit raw newlines / tabs inside strings
+ * instead of the required \\n / \\t escape sequences, causing JSON.parse to
+ * throw "Bad control character in string literal".
+ */
+function sanitizeControlChars(str) {
+  const ESC = { '\n': '\\n', '\r': '\\r', '\t': '\\t', '\b': '\\b', '\f': '\\f' };
+  let result   = '';
+  let inString = false;
+  let escape   = false;
+
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+
+    if (escape) { escape = false; result += ch; continue; }
+    if (ch === '\\' && inString) { escape = true; result += ch; continue; }
+
+    if (ch === '"') { inString = !inString; result += ch; continue; }
+
+    if (inString && ch.charCodeAt(0) < 0x20) {
+      result += ESC[ch] ?? `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
+      continue;
+    }
+
+    result += ch;
+  }
+  return result;
+}
+
+/**
  * Extract and parse JSON from an AI response.
  * Strips markdown fences, finds the first JSON structure,
- * and attempts repair on truncated responses.
+ * sanitizes raw control characters, and attempts repair on truncated responses.
  *
  * @param {string} text
  * @throws {Error} if JSON cannot be parsed even after repair
@@ -208,6 +238,9 @@ export function extractJSON(text) {
 
   const jsonStart = cleaned.search(/[{[]/);
   if (jsonStart > 0) cleaned = cleaned.slice(jsonStart);
+
+  // Sanitize raw control characters inside string literals before parsing
+  cleaned = sanitizeControlChars(cleaned);
 
   try {
     return JSON.parse(cleaned);
