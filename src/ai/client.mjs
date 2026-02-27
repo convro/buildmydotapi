@@ -9,7 +9,7 @@ export const MODELS = {
 
 // Per-model hard timeout — abort if AI goes silent for this long
 const TIMEOUT_MS = {
-  'deepseek-reasoner': 720_000, // 12 min — R1 reasoning can take a long time
+  'deepseek-reasoner': 2_100_000, // 35 min — R1 reasoning can take a long time
   'deepseek-chat':     180_000, //  3 min — fast model
 };
 
