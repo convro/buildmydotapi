@@ -81,6 +81,16 @@ Project management:
   vbs list                              List all saved projects
   vbs open  <name>                      Show project details
   vbs modify <name> prompt='changes'    Modify project with AI
+
+Shortcuts:
+  vbs logs <name>                       Tail pm2 logs
+  vbs restart <name>                    Restart pm2 processes
+  vbs stop <name>                       Stop pm2 processes
+  vbs status                            Show status of all projects
+  vbs delete <name>                     Remove project from VBS
+  vbs backup <name>                     Create project backup
+  vbs env <name>                        Show .env variables
+  vbs ports                             Show port map
 `)
   .action(async (prompt, options) => {
     // Validate type
@@ -125,6 +135,78 @@ Examples:
   .action(async (name, prompt, opts, cmd) => {
     const { runModify } = await import('../src/commands/modify.mjs');
     await runModify(name, prompt, cmd.parent?.opts() || {});
+  });
+
+// ── Subcommand: LOGS ──────────────────────────────────────────────────────────
+program
+  .command('logs <name>')
+  .description('Tail pm2 logs for a project')
+  .action(async (name) => {
+    const { runLogs } = await import('../src/commands/logs.mjs');
+    await runLogs(name);
+  });
+
+// ── Subcommand: RESTART ───────────────────────────────────────────────────────
+program
+  .command('restart <name>')
+  .description('Restart all pm2 processes for a project')
+  .action(async (name) => {
+    const { runRestart } = await import('../src/commands/restart.mjs');
+    await runRestart(name);
+  });
+
+// ── Subcommand: STOP ─────────────────────────────────────────────────────────
+program
+  .command('stop <name>')
+  .description('Stop all pm2 processes for a project')
+  .action(async (name) => {
+    const { runStop } = await import('../src/commands/stop.mjs');
+    await runStop(name);
+  });
+
+// ── Subcommand: STATUS ───────────────────────────────────────────────────────
+program
+  .command('status')
+  .description('Show pm2 status of all VBS projects')
+  .action(async () => {
+    const { runStatus } = await import('../src/commands/status.mjs');
+    await runStatus();
+  });
+
+// ── Subcommand: DELETE ───────────────────────────────────────────────────────
+program
+  .command('delete <name>')
+  .description('Stop pm2 and remove project from VBS registry')
+  .action(async (name) => {
+    const { runDelete } = await import('../src/commands/delete-project.mjs');
+    await runDelete(name);
+  });
+
+// ── Subcommand: BACKUP ──────────────────────────────────────────────────────
+program
+  .command('backup <name>')
+  .description('Create a timestamped backup of a project')
+  .action(async (name) => {
+    const { runBackup } = await import('../src/commands/backup.mjs');
+    await runBackup(name);
+  });
+
+// ── Subcommand: ENV ─────────────────────────────────────────────────────────
+program
+  .command('env <name>')
+  .description('Show environment variables for a project')
+  .action(async (name) => {
+    const { runEnv } = await import('../src/commands/env.mjs');
+    await runEnv(name);
+  });
+
+// ── Subcommand: PORTS ───────────────────────────────────────────────────────
+program
+  .command('ports')
+  .description('Show port map for all VBS projects')
+  .action(async () => {
+    const { runPorts } = await import('../src/commands/ports.mjs');
+    await runPorts();
   });
 
 program.parse(processedArgv);
