@@ -79,5 +79,12 @@ export function extractJSON(text) {
   const jsonStart = cleaned.search(/[{[]/);
   if (jsonStart > 0) cleaned = cleaned.slice(jsonStart);
 
-  return JSON.parse(cleaned);
+  try {
+    return JSON.parse(cleaned);
+  } catch (err) {
+    throw new Error(
+      `AI returned invalid JSON (response may have been truncated). ` +
+      `Parse error: ${err.message}\nRaw (last 200 chars): …${cleaned.slice(-200)}`
+    );
+  }
 }
