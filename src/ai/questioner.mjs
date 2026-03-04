@@ -132,7 +132,7 @@ Make sure questions reflect the specific tech in the analysis (e.g. if PostgreSQ
 For frontend_framework default, use: ${analysis.frontendFramework === 'nextjs' ? '"Next.js (SSR/SSG)"' : '"React (Vite SPA)"'}.
 Ask about suggested features if relevant — the user may want them.`;
 
-  const text   = await sendMessage(MODELS.OPUS, systemPrompt, userMessage, 2048);
+  const text   = await sendMessage(MODELS.OPUS, systemPrompt, userMessage, 4096);
   const parsed = extractJSON(text);
   return parsed.questions;
 }

@@ -170,7 +170,7 @@ Design a complete, detailed architecture plan for this project.
 Think about EVERY file, EVERY endpoint, EVERY data relationship, EVERY security measure.
 Be exhaustive — the code generator will rely on this plan to produce high-quality code.`;
 
-  const text = await sendMessage(MODELS.OPUS, ARCHITECT_SYSTEM, userMessage, 4096);
+  const text = await sendMessage(MODELS.OPUS, ARCHITECT_SYSTEM, userMessage, 8192);
   const result = extractJSON(text);
   return result.architecture || result;
 }

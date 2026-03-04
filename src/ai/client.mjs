@@ -42,7 +42,7 @@ export function getClient() {
  * @param {string} userMessage
  * @param {number} [maxTokens=8192]
  */
-export async function sendMessage(model, systemPrompt, userMessage, maxTokens = 8192) {
+export async function sendMessage(model, systemPrompt, userMessage, maxTokens = 16384) {
   const client = getClient();
 
   const params = {

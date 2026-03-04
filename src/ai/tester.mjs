@@ -51,7 +51,7 @@ Summary: ${passed}/${testResults.length} passed, ${failed} failed, avg response 
 
 ${summary}`;
 
-  return sendMessage(MODELS.HAIKU, systemPrompt, userMessage, 768);
+  return sendMessage(MODELS.HAIKU, systemPrompt, userMessage, 2048);
 }
 
 /**
@@ -81,5 +81,5 @@ Be specific — reference actual file names, line numbers, and error messages fr
 
   const userMessage = `pm2/node startup logs for "${projectName}":\n\n${logs.slice(0, 4000)}`;
 
-  return sendMessage(MODELS.HAIKU, systemPrompt, userMessage, 768);
+  return sendMessage(MODELS.HAIKU, systemPrompt, userMessage, 2048);
 }

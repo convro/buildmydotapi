@@ -87,6 +87,6 @@ export async function analyzeRequest(userPrompt, projectType = 'api') {
   const addon        = TYPE_ADDONS[projectType] || TYPE_ADDONS.api;
   const systemPrompt = BASE_SYSTEM + '\n' + addon;
 
-  const text = await sendMessage(MODELS.OPUS, systemPrompt, userPrompt, 4096);
+  const text = await sendMessage(MODELS.OPUS, systemPrompt, userPrompt, 8192);
   return extractJSON(text);
 }
