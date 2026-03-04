@@ -40,6 +40,16 @@ Rules:
 - SECURITY: validate any new user inputs, use parameterized queries for DB, escape output
 - QUALITY: follow the same architecture patterns as the existing codebase
 
+ANTI-PATTERNS — NEVER DO THESE:
+- NEVER: db.query("SELECT * FROM x WHERE id = " + id) → USE parameterized $1
+- NEVER: catch(err) { res.send(err) } → LEAKS stack traces
+- NEVER: bcrypt.hashSync / bcrypt.compareSync → BLOCKS event loop, use async
+- NEVER: jwt.sign without { expiresIn } → TOKEN NEVER EXPIRES
+- NEVER: Hardcoded secrets → use process.env
+- NEVER: Missing await on async calls → returns Promise not result
+- NEVER: res.json() without return in if/else → DOUBLE RESPONSE crash
+- NEVER: var → use const or let
+
 CRITICAL COMMENT RULE:
 - ALL comments in ALL generated code files MUST be written in Korean (한국어)
 - NEVER write comments in English — Korean only`;

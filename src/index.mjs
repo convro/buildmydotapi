@@ -16,7 +16,9 @@ import { askAllQuestions, askProjectDirectory } from './ui/prompt-ui.mjs';
 // ── AI ────────────────────────────────────────────────────────────────────────
 import { analyzeRequest }                     from './ai/analyzer.mjs';
 import { generateQuestions }                  from './ai/questioner.mjs';
+import { generateArchitecture }              from './ai/architect.mjs';
 import { generateCode }                       from './ai/codegen.mjs';
+import { reviewCode, applyPatches }           from './ai/reviewer.mjs';
 import { analyzeTestResults, diagnoseFailure } from './ai/tester.mjs';
 
 // ── System ────────────────────────────────────────────────────────────────────
@@ -328,10 +330,29 @@ export async function run(userPrompt, options = {}) {
     spinnerSuccess(dirSpinner, `Directory ready: ${chalk.cyan(projectDir)}`);
 
     // ══════════════════════════════════════════════════════════════════════════
-    // PHASE 4: CODE GENERATION
+    // PHASE 4: CODE GENERATION (Two-Pass + Review)
     // ══════════════════════════════════════════════════════════════════════════
     showPhaseHeader(4, 'CODE GENERATION');
 
+    // ── Pass 1: Architecture Planning ─────────────────────────────────────
+    const archSpinner = createSpinner('AI designing architecture plan...', 'AI thinking');
+    archSpinner.start();
+
+    let architecturePlan = null;
+    try {
+      architecturePlan = await generateArchitecture(analysis, userAnswers, userPrompt, projectType);
+      const fileCount   = architecturePlan.fileStructure?.length || '?';
+      const entityCount = architecturePlan.dataModel?.length || 0;
+      const endpointCount = architecturePlan.endpoints?.length || 0;
+      spinnerSuccess(archSpinner,
+        `Architecture plan ready — ${fileCount} files, ${entityCount} entities, ${endpointCount} endpoints`
+      );
+    } catch (err) {
+      spinnerWarn(archSpinner, `Architecture planning skipped: ${err.message}`);
+      // Continue without plan — codegen still works standalone
+    }
+
+    // ── Pass 2: Code Generation (with architecture plan) ──────────────────
     const codeSpinner = createSpinner(
       projectType === 'fullstack' ? 'Generating full-stack project (backend + frontend)...' :
       projectType === 'frontend'  ? 'Generating frontend app...' :
@@ -342,11 +363,48 @@ export async function run(userPrompt, options = {}) {
 
     let codeResult;
     try {
-      codeResult = await generateCode(analysis, userAnswers, userPrompt, serverIp, projectType);
+      codeResult = await generateCode(analysis, userAnswers, userPrompt, serverIp, projectType, architecturePlan);
       spinnerSuccess(codeSpinner, `Generated ${codeResult.files.length} files`);
     } catch (err) {
       spinnerFail(codeSpinner, `Code generation failed: ${err.message}`);
       throw err;
+    }
+
+    // ── Self-Review Gate ──────────────────────────────────────────────────
+    const reviewSpinner = createSpinner('AI reviewing code for bugs & security issues...', 'AI review');
+    reviewSpinner.start();
+
+    try {
+      const review = await reviewCode(codeResult.files, projectType);
+
+      if (review.status === 'clean' || review.issueCount === 0) {
+        spinnerSuccess(reviewSpinner, 'Code review passed — no issues found');
+      } else {
+        spinnerSuccess(reviewSpinner,
+          `Found ${review.issueCount} issue(s) — auto-patching ${review.patchedFiles?.length || 0} file(s)`
+        );
+
+        // Show issues to user
+        if (review.issues && review.issues.length > 0) {
+          console.log('');
+          for (const issue of review.issues.slice(0, 5)) {
+            const icon = issue.severity === 'critical' ? chalk.red('●') :
+                         issue.severity === 'security' ? chalk.yellow('●') :
+                         chalk.gray('●');
+            console.log(`  ${icon} ${chalk.white(issue.file)}: ${chalk.gray(issue.issue)}`);
+          }
+          console.log('');
+        }
+
+        // Apply patches
+        if (review.patchedFiles && review.patchedFiles.length > 0) {
+          codeResult.files = applyPatches(codeResult.files, review.patchedFiles);
+          log('success', `Patched ${review.patchedFiles.length} file(s) automatically`);
+        }
+      }
+    } catch (err) {
+      spinnerWarn(reviewSpinner, `Code review skipped: ${err.message}`);
+      // Continue without review — code is still usable
     }
 
     // Write files

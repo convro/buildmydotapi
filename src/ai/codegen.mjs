@@ -125,6 +125,28 @@ CODE QUALITY & ARCHITECTURE STANDARDS — APPLY TO ALL GENERATED CODE
   - Structure code so services can be tested independently
   - Use dependency injection patterns where possible
   - Include a GET /health endpoint returning: { status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() }
+
+═══════════════════════════════════════════════════════════════════════════════
+ANTI-PATTERNS — NEVER DO THESE (THEY ARE BUGS)
+═══════════════════════════════════════════════════════════════════════════════
+
+- NEVER: db.query("SELECT * FROM users WHERE id = " + id)  →  USE $1 parameterized
+- NEVER: catch(err) { res.send(err) }  →  LEAKS stack traces, use error middleware
+- NEVER: catch(err) { }  →  SWALLOWS errors silently, at minimum log it
+- NEVER: bcrypt.hashSync(password, 12)  →  BLOCKS event loop, use await bcrypt.hash()
+- NEVER: bcrypt.compareSync(...)  →  BLOCKS event loop, use await bcrypt.compare()
+- NEVER: jwt.sign(payload, secret) without { expiresIn }  →  TOKEN NEVER EXPIRES
+- NEVER: jwt.sign(payload, "mysecret")  →  HARDCODED secret, use process.env.JWT_SECRET
+- NEVER: console.log(password) or console.log(token)  →  LOGS SECRETS
+- NEVER: app.listen() inside app.js  →  breaks testability, put ONLY in index.js
+- NEVER: Missing await on async calls (bcrypt.compare, db.query, etc.)  →  returns Promise not result
+- NEVER: res.json({...}) without return in if/else  →  DOUBLE RESPONSE crash
+- NEVER: Error handler with (err, req, res) 3 args  →  Express needs 4: (err, req, res, next)
+- NEVER: Middleware registered AFTER routes  →  won't apply to routes above it
+- NEVER: new Client() for PostgreSQL  →  NO pooling, use new Pool()
+- NEVER: var anything  →  use const or let
+- NEVER: .then().catch() mixed with async/await in same function  →  pick one pattern
+- NEVER: CORS origin: "*" in production without explicit comment  →  security risk
 `;
 
 // ── API system prompt ─────────────────────────────────────────────────────────
@@ -395,14 +417,17 @@ ${SHARED_RULES}`;
 
 /**
  * Generate complete project code based on analysis and user answers.
+ * If an architecture plan is provided (two-pass mode), the codegen focuses
+ * purely on writing high-quality code that follows the plan.
  *
- * @param {object} analysis       - Analysis from analyzeRequest()
- * @param {object} answers        - User answers
- * @param {string} originalPrompt - Original user prompt
- * @param {string} [serverIp]     - Server IPv4 for context
- * @param {string} [projectType]  - 'api' | 'frontend' | 'fullstack'
+ * @param {object} analysis          - Analysis from analyzeRequest()
+ * @param {object} answers           - User answers
+ * @param {string} originalPrompt    - Original user prompt
+ * @param {string} [serverIp]        - Server IPv4 for context
+ * @param {string} [projectType]     - 'api' | 'frontend' | 'fullstack'
+ * @param {object} [architecturePlan] - Architecture plan from architect.mjs (Pass 1)
  */
-export async function generateCode(analysis, answers, originalPrompt, serverIp = null, projectType = 'api') {
+export async function generateCode(analysis, answers, originalPrompt, serverIp = null, projectType = 'api', architecturePlan = null) {
   const systemPromptMap = {
     api:       API_SYSTEM,
     frontend:  FRONTEND_SYSTEM,
@@ -429,6 +454,11 @@ export async function generateCode(analysis, answers, originalPrompt, serverIp =
       ? `Generate a complete frontend app using ${frontendLabel}.`
       : `Generate a full-stack app:\n- Backend: Express.js REST API in backend/\n- Frontend: ${frontendLabel} in frontend/\n- Backend port: ${answers.backendPort || 3001}, Frontend port: ${answers.frontendPort || 3000}`;
 
+  // Build architecture context if available (two-pass mode)
+  const archContext = architecturePlan
+    ? `\n\n═══ ARCHITECTURE PLAN (follow this precisely) ═══\n${JSON.stringify(architecturePlan, null, 2)}\n═══ END ARCHITECTURE PLAN ═══\n\nIMPORTANT: Follow the architecture plan above. Create EVERY file listed in fileStructure. Implement EVERY endpoint listed. Use the EXACT data model specified. Follow the middleware chain order. This plan was designed by a senior architect — your job is to implement it with perfect code quality.`
+    : '';
+
   const userMessage = `${typeContext}
 
 Original request: ${originalPrompt}
@@ -442,7 +472,7 @@ Styling: ${answers.styling || 'Tailwind CSS'}
 User configuration:
 ${JSON.stringify(answers, null, 2)}
 
-Project name: ${answers.projectName || analysis.suggestedProjectName}${serverContext}
+Project name: ${answers.projectName || analysis.suggestedProjectName}${serverContext}${archContext}
 
 Generate all necessary files for a complete, working, immediately deployable project.
 Remember: ALL code comments MUST be in Korean (한국어).`;
